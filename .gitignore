@@ -1,0 +1,13 @@
+.vs/
+Debug/
+Release/
+x64/
+x86/
+*.suo
+*.user
+*.log
+*.tmp
+*.exe
+*.pdb
+*.obj
+*.dll
