@@ -6,13 +6,17 @@
 #include <vector>
 
 class Student {
-public:
+private:
     std::string name;
     int age;
     double score;
-
+public:
     Student() : name(""), age(0), score(0.0) {}
     Student(const std::string& n, int a, double s): name(n), age(a), score(s) {}
+
+    std::string get_name() const { return name; }
+    int get_age() const { return age; }
+    double get_score() const { return score; }
 };
 
 extern std::vector<Student> students;

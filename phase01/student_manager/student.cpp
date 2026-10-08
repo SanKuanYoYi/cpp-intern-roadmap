@@ -97,12 +97,12 @@ void delete_student(){
     std::getline(std::cin, name);
 
     for(auto it = students.begin(); it != students.end(); ++it) {
-    if(it->name == name) {
-        students.erase(it); 
-        std::cout << "Student deleted successfully!" << std::endl;
-        return;
+        if( it->get_name() == name) {
+            students.erase(it);
+            std::cout << "Student deleted successfully!" << std::endl;
+            return;
+        }
     }
-}
 
     std::cout << "Student not found." << std::endl;
 }
@@ -113,12 +113,18 @@ void modify_student(){
     std::getline(std::cin, name);
 
     for(auto& student : students) {
-        if(student.name == name) {
+        if(student.get_name() == name) {
+            int new_age;
+            double new_score;
+
             std::cout << "Enter new age: ";
-            std::cin >> student.age;
+            std::cin >> new_age;
             std::cout << "Enter new score: ";
-            std::cin >> student.score;
+            std::cin >> new_score;
             std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');// Clear the input buffer
+
+            student.age = new_age;
+            student.score = new_score;
             std::cout << "Student modified successfully!" << std::endl;
             return;
         }
@@ -133,8 +139,8 @@ void search_student(){
     std::getline(std::cin, name);
 
     for(const auto& student : students) {
-        if(student.name == name) {
-            std::cout << "Student found: " << student.name << ", Age: " << student.age << ", Score: " << student.score << std::endl;
+        if(student.get_name() == name) {
+            std::cout << "Student found: " << student.get_name() << ", Age: " << student.get_age() << ", Score: " << student.get_score() << std::endl;
             return;
         }
     }
