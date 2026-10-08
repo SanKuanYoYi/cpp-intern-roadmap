@@ -6,6 +6,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <cstdio>
+#include <limits>
 
 std::vector<Student> students; // Vector to store student records
 
@@ -33,7 +34,7 @@ void student(){
         int choice;
         std::cout << "Enter your choice: ";
         std::cin >> choice;
-        getchar(); // Clear the input buffer
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');// Clear the input buffer
 
         switch(choice){
             case 1:
@@ -84,7 +85,7 @@ void add_student(){
     std::cin >> age;
     std::cout << "Enter student score: ";
     std::cin >> score;
-    getchar(); // Clear the input buffer
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');// Clear the input buffer
 
     students.push_back(Student(name, age, score));
     std::cout << "Student added successfully!" << std::endl;
@@ -117,7 +118,7 @@ void modify_student(){
             std::cin >> student.age;
             std::cout << "Enter new score: ";
             std::cin >> student.score;
-            getchar(); // Clear the input buffer
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');// Clear the input buffer
             std::cout << "Student modified successfully!" << std::endl;
             return;
         }

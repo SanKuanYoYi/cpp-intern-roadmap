@@ -1,0 +1,13 @@
+# VS Code 配置
+.vscode/
+
+# 编译产物
+bin/
+obj/
+
+# 其他常见忽略项
+*.o
+*.exe
+sum
+server
+client
