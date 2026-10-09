@@ -12,4 +12,3 @@ create table students(
 insert into students (name, age) values ('张三', 20), ('李四', 22), ('王五', 21);
 explain select * from students where name = '张三';
 
-    

@@ -8,8 +8,6 @@
 #include <cstdio>
 #include <limits>
 
-std::vector<Student> students; // Vector to store student records
-
 
 void menu(){
     std::cout<<"The Student Manager System"<<std::endl;
@@ -26,10 +24,8 @@ void menu(){
     std::cout<<"--------------------------------"<<std::endl;
 }
 
-void student(){
-
-    while(true){
-
+void StudentManager::run() {
+    while(true) {
         menu();
         int choice;
         std::cout << "Enter your choice: ";
@@ -56,11 +52,11 @@ void student(){
                 sort_students();
                 break;
             case 7: {
-                save_in_file("students.txt", students);
+                save_in_file("students.txt", students_);
                 break;
             }
             case 8: {
-                load_from_file("students.txt", students);
+                load_from_file("students.txt", students_);
                 break;
             }
             case 9:
@@ -73,7 +69,7 @@ void student(){
 
 }
 
-void add_student(){
+void StudentManager::add_student(){
 
     std::string name;
     int age;
@@ -87,32 +83,32 @@ void add_student(){
     std::cin >> score;
     std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');// Clear the input buffer
 
-    students.push_back(Student(name, age, score));
-    std::cout << "Student added successfully!" << std::endl;
+    students_.push_back(Student(name, age, score));
+    std::cout << "Student added successfully!\n" << std::endl;
 }
 
-void delete_student(){
+void StudentManager::delete_student(){
     std::string name;
     std::cout << "Enter the name of the student to delete: ";
     std::getline(std::cin, name);
 
-    for(auto it = students.begin(); it != students.end(); ++it) {
+    for(auto it = students_.begin(); it != students_.end(); ++it) {
         if( it->get_name() == name) {
-            students.erase(it);
-            std::cout << "Student deleted successfully!" << std::endl;
+            students_.erase(it);
+            std::cout << "Student deleted successfully!\n" << std::endl;
             return;
         }
     }
 
-    std::cout << "Student not found." << std::endl;
+    std::cout << "Student not found.\n" << std::endl;
 }
 
-void modify_student(){
+void StudentManager::modify_student(){
     std::string name;
     std::cout << "Enter the name of the student to modify: ";
     std::getline(std::cin, name);
 
-    for(auto& student : students) {
+    for(auto& student : students_) {
         if(student.get_name() == name) {
             int new_age;
             double new_score;
@@ -125,50 +121,50 @@ void modify_student(){
 
             student.set_age(new_age);
             student.set_score(new_score);
-            std::cout << "Student modified successfully!" << std::endl;
+            std::cout << "Student modified successfully!\n" << std::endl;
             return;
         }
     }
 
-    std::cout << "Student not found." << std::endl;
+    std::cout << "Student not found.\n" << std::endl;
 }
 
-void search_student(){
+void StudentManager::search_student(){
     std::string name;
     std::cout << "Enter the name of the student to search: ";
     std::getline(std::cin, name);
 
-    for(const auto& student : students) {
+    for(const auto& student : students_) {
         if(student.get_name() == name) {
             std::cout << "Student found: " << student.get_name() << ", Age: " << student.get_age() << ", Score: " << student.get_score() << std::endl;
             return;
         }
     }
 
-    std::cout << "Student not found." << std::endl;
+    std::cout << "Student not found.\n" << std::endl;
 }
 
-void show_all_students(){
-    std::cout << "There are " << students.size() << " students in the system." << std::endl;
-    for(const auto& student : students) {
+void StudentManager::show_all_students(){
+    std::cout << "There are " << students_.size() << " students in the system." << std::endl;
+    for(const auto& student : students_) {
         if(!student.get_name().empty()) {
             std::cout << "Name: " << student.get_name() << ", Age: " << student.get_age() << ", Score: " << student.get_score() << std::endl;
         }
     }
 }
 
-void sort_students(){
-    std::sort(students.begin(), students.end(), [](const Student& a, const Student& b) {
+void StudentManager::sort_students(){
+    std::sort(students_.begin(), students_.end(), [](const Student& a, const Student& b) {
         return a.get_score() > b.get_score(); // Sort in descending order of score
     });
 
-    std::cout << "Students sorted by score in descending order." << std::endl;
+    std::cout << "Students sorted by score in descending order.\n" << std::endl;
 }
 
 void save_in_file(const std::string& filename, const std::vector<Student>& students) {
     std::ofstream out(filename);
     if(!out.is_open()) {
-        std::cerr << "Error opening file for writing." << std::endl;
+        std::cerr << "Error opening file for writing.\n" << std::endl;
         return;
     }
 
@@ -180,13 +176,13 @@ void save_in_file(const std::string& filename, const std::vector<Student>& stude
 
     out.close();
 
-    std::cout<< "Students saved to file successfully." << std::endl;
+    std::cout<< "Students saved to file successfully.\n" << std::endl;
 }
 
 void load_from_file(const std::string& filename, std::vector<Student>& students) {
     std::ifstream in(filename);
     if(!in.is_open()) {
-        std::cerr << "Error opening file for reading." << std::endl;
+        std::cerr << "Error opening file for reading.\n" << std::endl;
         return;
     }
 
@@ -201,5 +197,5 @@ void load_from_file(const std::string& filename, std::vector<Student>& students)
 
     in.close();
 
-    std::cout<< "Students loaded from file successfully." << std::endl;
+    std::cout<< "Students loaded from file successfully.\n" << std::endl;
 }

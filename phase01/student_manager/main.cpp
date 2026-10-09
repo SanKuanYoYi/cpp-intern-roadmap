@@ -2,6 +2,7 @@
 
 int main()
 {
-    student();
+    StudentManager manager;
+    manager.run();
     return 0;
 }
