@@ -1,3 +1,0 @@
-/home/sgyy/projects/cpp-intern-roadmap/build/CMakeFiles/student_manager.dir
-/home/sgyy/projects/cpp-intern-roadmap/build/CMakeFiles/edit_cache.dir
-/home/sgyy/projects/cpp-intern-roadmap/build/CMakeFiles/rebuild_cache.dir
