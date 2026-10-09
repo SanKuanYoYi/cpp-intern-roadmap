@@ -1,4 +1,4 @@
-#include "head_files.h"
+#include "student.h"
 
 int main()
 {
