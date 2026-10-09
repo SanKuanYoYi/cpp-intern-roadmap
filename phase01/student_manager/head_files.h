@@ -17,6 +17,10 @@ public:
     std::string get_name() const { return name; }
     int get_age() const { return age; }
     double get_score() const { return score; }
+
+    void set_name(const std::string& n) { name = n; }
+    void set_age(int a) { age = a; }
+    void set_score(double s) { score = s; }
 };
 
 extern std::vector<Student> students;

@@ -123,8 +123,8 @@ void modify_student(){
             std::cin >> new_score;
             std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');// Clear the input buffer
 
-            student.age = new_age;
-            student.score = new_score;
+            student.set_age(new_age);
+            student.set_score(new_score);
             std::cout << "Student modified successfully!" << std::endl;
             return;
         }
@@ -151,15 +151,15 @@ void search_student(){
 void show_all_students(){
     std::cout << "There are " << students.size() << " students in the system." << std::endl;
     for(const auto& student : students) {
-        if(!student.name.empty()) {
-            std::cout << "Name: " << student.name << ", Age: " << student.age << ", Score: " << student.score << std::endl;
+        if(!student.get_name().empty()) {
+            std::cout << "Name: " << student.get_name() << ", Age: " << student.get_age() << ", Score: " << student.get_score() << std::endl;
         }
     }
 }
 
 void sort_students(){
     std::sort(students.begin(), students.end(), [](const Student& a, const Student& b) {
-        return a.score > b.score; // Sort in descending order of score
+        return a.get_score() > b.get_score(); // Sort in descending order of score
     });
 
     std::cout << "Students sorted by score in descending order." << std::endl;
@@ -173,8 +173,8 @@ void save_in_file(const std::string& filename, const std::vector<Student>& stude
     }
 
     for(const auto& student : students) {
-        if(!student.name.empty()) {
-            out << student.name << " " << student.age << " " << student.score << std::endl;
+        if(!student.get_name().empty()) {
+            out << student.get_name() << " " << student.get_age() << " " << student.get_score() << std::endl;
         }
     }
 
@@ -191,9 +191,12 @@ void load_from_file(const std::string& filename, std::vector<Student>& students)
     }
 
     students.clear();
-    Student temp("", 0, 0.0);
-    while(in >> temp.name >> temp.age >> temp.score) {
-        students.push_back(temp);
+    std::string name;
+    int age = 0;
+    double score = 0.0;
+
+    while(in >> name >> age >> score) {
+        students.push_back(Student(name, age, score));
     }
 
     in.close();
