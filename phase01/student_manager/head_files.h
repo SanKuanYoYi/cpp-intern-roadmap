@@ -1,7 +1,6 @@
 #ifndef HEAD_FILES_H
 #define HEAD_FILES_H
 
-#include <iostream>
 #include <string>
 #include <vector>
 
@@ -23,7 +22,6 @@ public:
     void set_score(double s) { score = s; }
 };
 
-extern std::vector<Student> students;
 
 void student();
 void menu();
