@@ -136,7 +136,7 @@ void StudentManager::search_student(){
 
     for(const auto& student : students_) {
         if(student.get_name() == name) {
-            std::cout << "Student found: " << student.get_name() << ", Age: " << student.get_age() << ", Score: " << student.get_score() << std::endl;
+            std::cout << "Student found: " << student.get_name() << ", Age: " << student.get_age() << ", Score: " << student.get_score() << std::endl << std::endl;
             return;
         }
     }
@@ -145,10 +145,10 @@ void StudentManager::search_student(){
 }
 
 void StudentManager::show_all_students(){
-    std::cout << "There are " << students_.size() << " students in the system." << std::endl;
+    std::cout << "There are " << students_.size() << " students in the system.\n" << std::endl;
     for(const auto& student : students_) {
         if(!student.get_name().empty()) {
-            std::cout << "Name: " << student.get_name() << ", Age: " << student.get_age() << ", Score: " << student.get_score() << std::endl;
+            std::cout << "Name: " << student.get_name() << ", Age: " << student.get_age() << ", Score: " << student.get_score() << std::endl << std::endl;
         }
     }
 }
@@ -161,7 +161,7 @@ void StudentManager::sort_students(){
     std::cout << "Students sorted by score in descending order.\n" << std::endl;
 }
 
-void save_in_file(const std::string& filename, const std::vector<Student>& students) {
+void StudentManager::save_in_file(const std::string& filename, const std::vector<Student>& students) {
     std::ofstream out(filename);
     if(!out.is_open()) {
         std::cerr << "Error opening file for writing.\n" << std::endl;
@@ -179,7 +179,7 @@ void save_in_file(const std::string& filename, const std::vector<Student>& stude
     std::cout<< "Students saved to file successfully.\n" << std::endl;
 }
 
-void load_from_file(const std::string& filename, std::vector<Student>& students) {
+void StudentManager::load_from_file(const std::string& filename, std::vector<Student>& students) {
     std::ifstream in(filename);
     if(!in.is_open()) {
         std::cerr << "Error opening file for reading.\n" << std::endl;

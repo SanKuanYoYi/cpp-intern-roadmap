@@ -57,7 +57,12 @@ at ... 和 by ...：这是调用栈，直接告诉你泄漏发生在 my_program.
 #查看当前系统所有监听端口，并找出 3306 是否在监听（MySQL 默认端口）
 ① ss -tuln | grep 3306
 ② netstat -tuln | grep 3306
-③ lsof -i | grep 3306
+③ lsof -i | grep 
+输出：
+tcp   LISTEN 0      151        127.0.0.1:3306       0.0.0.0:*   
+tcp   LISTEN 0      70         127.0.0.1:33060      0.0.0.0:*
+结论：
+查监听用 ss -tuln，查端口用 grep，查进程用 lsof -i
 
 
 #
