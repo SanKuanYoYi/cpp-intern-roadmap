@@ -81,16 +81,16 @@ while (getchar() != '\n');
 那么 getchar() 会返回 EOF
 那么这个循环就会一直等待，导致程序卡死
 */
-    int a5;
-    char c5;
-    std::cin >> a5;             // 输入 999(多个空格)xyz 遇到空格就停止读取，"abc\n"被留在缓冲区里
-    std::cout << "开始清除缓冲区...\n";
-    while (getchar() != '\n')   // 循环清除缓冲区直到遇到换行符
-        std::cout << "清除一个字符\n";
-    std::cin.get(c5);           // 现在可以正常读取新的字符(再输入)(举例'w')
-    std::cout << "a5: " << a5
-              << ", c5 是换行? " << ((c5 == '\n') ? "是" : "否")
-              << ", ASCII: " << static_cast<int>(c5) << '\n';
+    // int a5;
+    // char c5;
+    // std::cin >> a5;             // 输入 999(多个空格)xyz 遇到空格就停止读取，"abc\n"被留在缓冲区里
+    // std::cout << "开始清除缓冲区...\n";
+    // while (getchar() != '\n')   // 循环清除缓冲区直到遇到换行符
+    //     std::cout << "清除一个字符\n";
+    // std::cin.get(c5);           // 现在可以正常读取新的字符(再输入)(举例'w')
+    // std::cout << "a5: " << a5
+    //           << ", c5 是换行? " << ((c5 == '\n') ? "是" : "否")
+    //           << ", ASCII: " << static_cast<int>(c5) << '\n';
 
 //此处展示无限循环的图片
 
@@ -115,14 +115,14 @@ while (getchar() != '\n');
 避免了乱码和无限循环的问题
 */
 
-    int a7;
-    char c7;
-    std::cin >> a7;             // 输入 888(多个空格)xyz
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-    std::cin.get(c7);           // 现在可以正常读取新的字符(再输入)(举例'w')
-    std::cout << "a7: " << a7
-              << ", c7 是换行? " << ((c7 == '\n') ? "是" : "否")
-              << ", ASCII: " << static_cast<int>(c7) << '\n';
+    // int a7;
+    // char c7;
+    // std::cin >> a7;             // 输入 888(多个空格)xyz
+    // std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    // std::cin.get(c7);           // 现在可以正常读取新的字符(再输入)(举例'w')
+    // std::cout << "a7: " << a7
+    //           << ", c7 是换行? " << ((c7 == '\n') ? "是" : "否")
+    //           << ", ASCII: " << static_cast<int>(c7) << '\n';
 
 
 /*

@@ -1,4 +1,7 @@
 #include <iostream>
+#include <cstdio>   //std::fopen, std::fclose
+#include <stdexcept>    // std::runtime_error
+#include <string>
 
 
 class FileGuard{
@@ -25,6 +28,32 @@ public:
 
     FileGuard(const FileGuard&) = delete; // 禁止拷贝构造
     FileGuard& operator=(const FileGuard&) = delete; // 禁止拷贝赋值
+
+    FILE* get() const { return fp; } // 获取文件指针
+};
+
+
+
+class FileGuard2{
+private:
+    FILE* fp;
+
+public:
+    FileGuard2(const char* filename, const char* mode)
+    : fp(std::fopen(filename, mode)){
+        if(!fp){
+            throw std::runtime_error(std::string("Failed to open file: ") + filename);
+        }
+    }
+
+    ~FileGuard2(){
+        if(fp){
+            std::fclose(fp);
+        }
+    }
+
+    FileGuard2(const FileGuard2&) = delete; // 禁止拷贝构造
+    FileGuard2& operator=(const FileGuard2&) = delete; // 禁止拷贝赋值
 
     FILE* get() const { return fp; } // 获取文件指针
 };
