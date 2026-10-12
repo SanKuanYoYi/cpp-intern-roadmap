@@ -91,7 +91,8 @@ C++11 引入移动语义后，变成了五法则（Rule of Five）：如果你�
 
 
 /*
-了解Modern C++  零法则
+了解:
+Modern C++  零法则
 class MyString {
     std::string data_; // 直接用标准库的 string
 public:
