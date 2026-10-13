@@ -278,4 +278,55 @@ readelf -d ./app | grep NEEDED
 
 
 
+# starce 查系统调用
+例如 C++ 代码里，fopen 只是一个库函数。但到了操作系统层面，它实际上是发起了一个叫 openat 的系统调用。
+strace 就能把这种“语言层面的调用”直接翻译成“操作系统层面的行为”。
 
+<!-->资料了解：
+主要用于：
+排查“文件找不到”：程序报错“配置文件不存在”，但你看代码路径明明没错。用 strace 一看，原来程序实际去读的是另一个目录。
+排查“程序卡死”：服务突然不响应了，CPU 占用不高，也不崩。用 strace 挂上去，发现它卡在 read 或 futex 上，瞬间知道是在等网络数据还是在等锁。
+排查“网络连不上”：connect 系统调用返回了什么错误码，一目了然。
+性能初步分析：统计哪个系统调用耗时最长、调用最频繁。
+
+查看它到底打开了哪些文件
+strace -e trace=openat,read,write,close ./app
+
+输出示例：
+openat(AT_FDCWD, "students.txt", O_RDONLY) = 3
+read(3, "Alice 18 90\n", 4096) = 12
+close(3) = 0
+write(1, "Students loaded successfully.\n", 31) = 31
+
+openat 返回 3：文件描述符是 3。
+read 返回 12：读到了 12 个字节。
+write(1, ...)：1 代表标准输出（终端）。
+如果 openat 返回 -1 ENOENT：说明文件根本不存在！程序里写的错误处理立刻就被证实了。
+
+-f：跟踪子进程和线程
+你的程序如果用了多线程（std::thread），或者调用了 fork，必须加 -f，否则子线程干了啥你根本看不到。
+strace -f ./app
+
+-p <PID>：挂载到正在运行的进程（线上排查神技）
+strace -p 12345
+
+-c：统计各系统调用的次数和时间
+初步排查性能瓶颈
+strace -c ./app
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 45.23    0.001234         123        10           openat
+ 30.12    0.000821          82        10           read
+
+
+ -T 和 -tt：显示耗时和精确时间戳
+strace -T -tt -e trace=openat ./app
+
+strace：跟踪系统调用（内核层面），比如 open、read、mmap、socket。
+ltrace：跟踪库函数调用（用户态层面），比如 strlen、malloc、printf。
+
+致命警告（生产环境大忌）
+性能杀手：strace 会让程序慢几十倍到几百倍。因为每次系统调用，内核都要暂停程序，把控制权交给 strace 打印日志，再放行。严禁在生产环境长期开着 strace。
+海量日志：一个稍微大点的 C++ 后端服务，几秒钟就能刷出几万行系统调用日志，瞬间把你的磁盘写满。排查完立刻 Ctrl+C 停掉。
+权限问题：跟踪别人的进程通常需要 root 权限
+<-->
