@@ -1,3 +1,6 @@
+/*
+！！故意制造的内存错误用于学习 ！！
+*/
 #include <iostream>
 
 int* createArray() {

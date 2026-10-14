@@ -37,8 +37,8 @@ public:
     void search_student();
     void show_all_students();
     void sort_students();
-    void save_in_file(const std::string& filename, const std::vector<Student>& students);
-    void load_from_file(const std::string& filename, std::vector<Student>& students);
+    void save_in_file(const std::string& filename);
+    void load_from_file(const std::string& filename);
 };
 
 

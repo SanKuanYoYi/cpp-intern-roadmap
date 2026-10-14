@@ -52,11 +52,11 @@ void StudentManager::run() {
                 sort_students();
                 break;
             case 7: {
-                save_in_file("students.txt", students_);
+                save_in_file("students.txt");
                 break;
             }
             case 8: {
-                load_from_file("students.txt", students_);
+                load_from_file("students.txt");
                 break;
             }
             case 9:
@@ -161,14 +161,14 @@ void StudentManager::sort_students(){
     std::cout << "Students sorted by score in descending order.\n" << std::endl;
 }
 
-void StudentManager::save_in_file(const std::string& filename, const std::vector<Student>& students) {
+void StudentManager::save_in_file(const std::string& filename) {
     std::ofstream out(filename);
     if(!out.is_open()) {
         std::cerr << "Error opening file for writing.\n" << std::endl;
         return;
     }
 
-    for(const auto& student : students) {
+    for(const auto& student : students_) {
         if(!student.get_name().empty()) {
             out << student.get_name() << " " << student.get_age() << " " << student.get_score() << std::endl;
         }
@@ -179,20 +179,20 @@ void StudentManager::save_in_file(const std::string& filename, const std::vector
     std::cout<< "Students saved to file successfully.\n" << std::endl;
 }
 
-void StudentManager::load_from_file(const std::string& filename, std::vector<Student>& students) {
+void StudentManager::load_from_file(const std::string& filename) {
     std::ifstream in(filename);
     if(!in.is_open()) {
         std::cerr << "Error opening file for reading.\n" << std::endl;
         return;
     }
 
-    students.clear();
+    students_.clear();
     std::string name;
     int age = 0;
     double score = 0.0;
 
     while(in >> name >> age >> score) {
-        students.push_back(Student(name, age, score));
+        students_.push_back(Student(name, age, score));
     }
 
     in.close();

@@ -96,8 +96,8 @@ Modern C++  零法则
 class MyString {
     std::string data_; // 直接用标准库的 string
 public:
-    MyString(const char* s = "") : data_(s) {}
-    const char* c_str() const { return data_.c_str(); }
+MyString(const char* s = "") : data_(s) {}
+const char* c_str() const { return data_.c_str(); }
     size_t size() const { return data_.size(); }
     
     // 所有拷贝、移动、析构，编译器默认生成，无需手写！
