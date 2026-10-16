@@ -1,7 +1,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <utility>   // std::swap, std::move, std::move_if_noexcept
-#include <string>    // main 里用了 std::string
+#include <string>    // std::string
 #include <cstddef>   // size_t
 
 template <typename T>
@@ -213,7 +213,6 @@ void Vector<T>::reserve(size_t newCapacity)
 
     // 2. 把旧元素搬到新内存（异常安全：用 move_if_noexcept）
     size_t i = 0;
-
     try
     {
         for (; i < size_; ++i)
@@ -279,4 +278,68 @@ int main()
 size=10 cap=16                  //1-2-4-8-16
 hello world 
 v.size=0 v3.size=10             //置空
+*/
+
+/*
+普通 new:
+  operator new  →  分配对象壳  →  构造函数  →  对象可用
+
+普通 delete:
+  析构函数  →  清理对象拥有的资源  →  operator delete  →  释放对象壳
+
+placement new:
+  已有内存  →  构造函数  →  对象可用
+  （不调用 operator new，不分配壳）
+
+placement new 的清理:
+  手动 ~T()  →  清理资源
+  内存由外层负责（栈自动回收 / 手动 ::operator delete）
+*/
+
+
+/*
+AI解析：
+从“最终效果”上看，delete 确实等于“析构 + 释放内存”。
+但为什么手写 Vector 时绝对不能直接用 delete（或 delete[]）来代替 Deallocate？
+
+冲突一：内存的“出身”不一样（配对铁律）
+new T[n] 的底层：编译器会偷偷在分配的内存块头部多申请几个字节，用来记录数组长度 n。
+它返回给你的指针，其实是偏移了这几字节之后的地址。
+delete[] p 的底层：它拿到指针后，会向前回溯几个字节，
+读出那个隐藏的长度 n，然后循环调用 n 次析构函数，最后连头部一起释放。
+
+而 Vector 用的是：
+::operator new(capacity_ * sizeof(T))：这是纯裸内存分配，没有头部元数据。
+它返回的就是内存块的绝对起始地址。
+如果你对这个指针强行使用 delete[]，delete[] 会向前回溯去读那个根本不存在的“数组长度”，
+导致读取越界，直接崩溃。
+
+配对铁律：
+new T[] 必须配 delete[]。
+::operator new 必须配 ::operator delete。
+
+冲突二：new T[] 会“擅自”构造所有元素（性能与约束）
+这是 std::vector 绝对不用 new T[] 的根本原因。
+如果你用 new T[capacity_] 来分配内存：
+它会立刻调用 T 的默认构造函数，构造出 capacity_ 个对象。
+这意味着 T 必须有默认构造函数。没有默认构造函数，代码直接编译失败。
+你仅仅是想预留内存（reserve），结果却把整个数组都默认构造了一遍。
+如果 T 是 std::string，它会分配一堆空字符串；如果 T 是 MyBigData，它会初始化一堆大对象，性能直接崩盘。
+
+Vector 的做法：
+::operator new 分配了裸内存，不构造任何对象。只有当你 push_back 时，才用 placement new 按需构造。
+capacity_ 只代表“能装多少”，不代表“已经构造了多少”。
+因此，在释放时，你根本不能指望 delete[] 替你自动析构，
+因为它不知道你到底手动构造了几个（size_ 个，而不是 capacity_ 个）。
+你必须手动循环 size_ 次，逐个调用 ~T()。
+
+冲突三：范围控制——delete[] 分不清 size_ 和 capacity_
+delete[] 的逻辑是：“释放这整个数组，对数组里每一个元素调用析构函数”。
+但在 Vector 里：
+size_ = 3：只有下标 0、1、2 是真正构造过的对象。
+capacity_ = 10：下标 3 到 9 是原始内存，里面没有活着的对象。
+如果你调用 delete[] data_，它会试图对下标 3 到 9 也调用析构函数。
+对未构造的裸内存调用 ~T()，是典型的未定义行为。
+如果 T 是 std::string，它会去释放一个野指针，程序当场崩溃。
+而 Deallocate 循环条件是 i < size_，精准避开那些尚未构造的裸内存区域。
 */
