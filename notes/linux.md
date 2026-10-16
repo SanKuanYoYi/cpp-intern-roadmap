@@ -26,6 +26,9 @@ core dump 分析：bt 看崩溃点，frame 切帧，info registers。
 watchpoint：watch var 监视变量变化。
 修改运行时值：set var x=10。
 
+bt 输出
+#0 是最内层、最后执行的地方
+#xx 是最外层、最早调用的地方
 
 ------------------------------------------------------------------------------------
 # Valgrind初识
@@ -80,60 +83,19 @@ tcp   LISTEN 0      70         127.0.0.1:33060      0.0.0.0:*
 
 # 对目录下的 gdb_test.cpp (有段错误) 进行调试
 
-首先
-g++ -g -O0 main.cpp -o app
-./app
+
 输出：Segmentation fault (core dumped)
 
-在终端输入 gdb ./app，进入 GDB 交互界面。
-
-1. 第一阶段：基础平A（断点、单步、打印）
-
-list / l：看源码
-gdb
-(gdb) l
-会显示当前文件的代码片段。按回车键继续往下翻。
-
-break / b：打断点
-(gdb) b main         # 在 main 函数入口打断点
-(gdb) b 20           # 在当前文件第 20 行打断点（也就是 printList 里面）
-
-run / r：启动程序
-(gdb) r
-程序会在断点处停下来，显示 Breakpoint 1, main () at main.cpp:...
-
-next / n 和 step / s：单步执行
-n：单步执行，不进入函数内部。
-s：单步执行，进入函数内部（比如从 main 进入 printList）。
-(gdb) n
-(gdb) s
-
-print / p：打印变量
-(gdb) p node1        # 打印指针地址
-(gdb) p node1->value # 打印节点里的值
-(gdb) p *node1       # 打印整个节点内容
-
-continue / c 和 quit / q
-(gdb) c              # 继续运行到下一个断点或结束
-(gdb) q              # 退出 GDB
-
-
-2. 第二阶段：破案神器（定位 Segmentation fault）
-当程序崩溃时，GDB 可以瞬间告诉你死在哪一行、谁调用了它。
-
-gdb ./app
-(gdb) r
-#程序崩溃，显示 Program received signal SIGSEGV, Segmentation fault.
-
-backtrace / bt：查看调用栈（最重要！）
+backtrace / bt：查看调用栈
 (gdb) bt
-你的终端会输出类似：
 #0  main () at main.cpp:27   <-- 罪魁祸首就在第 27 行！
 如果是在深层函数里崩溃，bt 
 #0  printList (head=0x0) at main.cpp:10
 #1  0x000055... in main () at main.cpp:20
-这就像监控录像，精确指出是哪一行代码干的坏事。
 
+
+
+<!-->
 frame / f：切换栈帧
 如果崩溃发生在函数 A 调用的函数 B 里，你想看函数 A 的变量：
 (gdb) f 1    # 切换到第 1 层栈帧（main 函数）
@@ -142,7 +104,6 @@ frame / f：切换栈帧
 info locals：查看当前所有局部变量
 (gdb) info locals
 
-3. 第三阶段：进阶追踪（条件断点、监控变量）
 条件断点（非常适合循环里排查第 N 次出错）
 (gdb) b main.cpp:15 if curr->value == 20   # 当 curr->value 等于 20 时才停下来
 (gdb) r
@@ -157,7 +118,7 @@ finish：执行完当前函数并停下
 (gdb) b printList
 (gdb) r
 (gdb) finish   # 直接跑完 printList，看它的返回值
-
+<-->
 
 
 # 对目录下的 valgrind_test.cpp (有内存错误) 进行测试
