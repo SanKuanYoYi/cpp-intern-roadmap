@@ -46,7 +46,7 @@ MyString::MyString(const MyString &other)
     std::strcpy(data_, other.data_);
 }
 
-MyString &MyString::operator=(const MyString &other) noexcept
+MyString &MyString::operator=(const MyString &other)
 {
     if (this != &other)
     {
@@ -57,8 +57,8 @@ MyString &MyString::operator=(const MyString &other) noexcept
     }
     return *this;
 }
-//delete[] data_ 之后如果 new 抛异常，this->data_ 变成悬空指针，析构时会再次 delete[]，导致未定义行为。
-//应该写swap
+// delete[] data_ 之后如果 new 抛异常，this->data_ 变成悬空指针，析构时会再次 delete[]，导致未定义行为。
+// 应该写swap
 /*
 最开始写的 *this == other 判断自赋值
 *this 和 other 都是对象，不是地址。
@@ -79,6 +79,8 @@ MyString::MyString(MyString &&other) noexcept
 {
     data_ = other.data_;
     len_ = other.getLen();
+    other.data_ = nullptr;
+    other.len_ = 0;
 }
 /*
 other.getData()赋值，但返回 const 版本，类型不对；也多一次函数调用

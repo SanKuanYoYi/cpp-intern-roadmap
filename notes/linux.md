@@ -93,6 +93,9 @@ backtrace / bt：查看调用栈
 #0  printList (head=0x0) at main.cpp:10
 #1  0x000055... in main () at main.cpp:20
 
+命令：gdb ./app → bt → f 1 → p node1
+输出：#0 main () at main.cpp:27
+结论：崩在 main 里的空指针解引用，往上一层是 printList 调用返回
 
 
 <!-->
