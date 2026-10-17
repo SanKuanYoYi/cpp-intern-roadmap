@@ -87,7 +87,7 @@ other.getData()赋值，但返回 const 版本，类型不对；也多一次函�
 应该直接用other.data_
 */
 
-MyString &MyString::operator=(MyString &&other)
+MyString &MyString::operator=(MyString &&other) noexcept
 {
     // if (this != &other)
     // {
@@ -106,6 +106,9 @@ MyString &MyString::operator=(MyString &&other)
         len_ = other.len_;
         other.data_ = nullptr;
         other.len_ = 0;
+        //std::swap(data_, other.data_);
+        //std::swap(len_,  other.len_);
+        //也可以
     }
     return *this;
 }

@@ -38,3 +38,5 @@ Query_time: SQL 语句执行耗时（秒）
 Rows_sent: 查询返回给客户端的结果行数
 Rows_examined: 存储引擎层为了执行这条 SQL，实际扫描了多少行数据
 */
+SET GLOBAL long_query_time = 0.5;
+SET GLOBAL log_queries_not_using_indexes = OFF;
