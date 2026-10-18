@@ -401,3 +401,92 @@ Thread 1 (Thread 0x7ffff7d9f740 (LWP 12345)):
 Thread 3（对应 thread2_func）：卡在 app.cpp:20，等锁 A。
 Thread 2（对应 thread1_func）：卡在 app.cpp:13，等锁 B。
 Thread 1（主线程）：卡在 app.cpp:29，执行 t1.join() 等子线程，结果等了个寂寞。
+
+
+
+# helgrind 检测目录下的 race_condition.cpp 数据竞争
+AI 解析：
+gelgrind 在底层记录每一个内存地址的每一次读和写
+一旦发现
+两个不同的线程，访问了同一个内存地址。
+至少有一个是“写”操作。
+且这两个操作都没有持有同一个锁。
+会立刻喊：“这里有一个数据竞争（Data Race）
+
+valgrind --tool=helgrind ./race_condition
+输出一大堆：
+
+<!-->
+==6620== Thread #3 was created
+...
+==6620==    by 0x4001468: run(bool) (race_condition.cpp:64)
+<-->
+第 3 号线程，是在 race_condition.cpp 的第 64 行，通过 std::vector<std::thread> 的 emplace_back 创建的
+
+<!-->
+==6620== Possible data race during read of size 4 at 0x4007160 by thread #3
+==6620== Locks held: none
+==6620==    at 0x400135A: increment_unsafe() (race_condition.cpp:19)
+<-->
+线程 3 正在读取一个 4 字节的内存（0x4007160），位置在 race_condition.cpp 的第 19 行（你的 increment_unsafe 函数里）
+Locks held: none（未持有任何锁）。说明它是“裸奔”读取的
+
+<!-->
+==6620== This conflicts with a previous write of size 4 by thread #2
+==6620== Locks held: none
+==6620==    at 0x4001363: increment_unsafe() (race_condition.cpp:19)
+...
+==6620==  Address 0x4007160 is 0 bytes inside data symbol "counter"
+<-->
+线程 3 的读取，和线程 2 刚刚写入的冲突了！而且线程 2 同样没有持锁
+冲突的这个变量，正是你定义的全局变量 counter
+
+<!-->
+==6620== ERROR SUMMARY: 90 errors from 2 contexts (suppressed: 1350304 from 10)
+<-->
+总共报告了 90 个错误（读冲突 + 写冲突）
+suppressed: 1350304：说明 Valgrind 自动屏蔽了 130 多万条来自系统底层库的误报
+
+
+# strace -f 看线程创建
+strace -f -e trace=clone ./thread_basic
+AI 解析：
+-f：跟踪子进程/线程
+-e trace=clone：只盯住 clone 系统调用。
+在 Linux 内核眼里，根本没有“线程”这个概念，创建线程本质上就是调用了 clone 系统调用
+
+<!-->
+strace: Process 7956 attached
+...
+[join  ] finish work_id=1 ... time= ...
+[pid  7956] +++ exited with 0 +++
+<-->
+AI 解析：
+有 4 个 Process（实际上是 4 个线程）被 attached（创建）
+几乎同时（19:20:21.220 左右）开始。由于主线程调用了 join()，主线程会被阻塞，直到子线程结束
+子线程逐个执行完毕打印 finish，紧接着 strace 捕获到内核层面的 +++ exited with 0 +++（线程真正销毁）
+
+<!-->
+[main  ] 主线程继续执行...
+[detach] work_id=1 thread_id=139716955465408 ...
+[pid  7960] +++ exited with 0 +++
+<-->
+AI 解析：
+主线程瞬间执行完自己的任务，打印“主线程退出”，然后 main 函数结束，主进程退出
+在 Linux 中，只要还有活着的线程，整个进程就不会被彻底销毁。
+主线程虽然退出了，但这 4 个 detach 的子线程还在后台默默跑完，最后由内核挨个回收
+但这也极其危险：如果主线程退出了，操作系统把整个进程的内存收回了，这些子线程去访问主线程的资源，直接就会段错误崩溃
+
+<!-->
+strace: Process 7964 attached
+[pid  7964] +++ exited with 0 +++
+terminate called without an active exception
+--- SIGABRT {si_signo=SIGABRT...} ---
++++ killed by SIGABRT (core dumped) +++
+<-->
+AI 解析：
+创建了一个线程std::thread t(func); 跑完了函数，瞬间打印了 exited with 0
+程序结束前，变量 t 离开了作用域，触发了 std::thread 的析构函数
+在析构时，还处于 joinable（可汇合）状态（即既没有 join 也没有 detach），
+程序就会直接调用 std::terminate() 导致崩溃
+崩溃引发了 SIGABRT（Abort 信号），系统生成了 core dumped（核心转储）
