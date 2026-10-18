@@ -216,3 +216,56 @@ const int b = 3;           // 常量：运行时赋值，不能改
 constexpr int c = 3;       // 编译期常量：编译时就算出来了，不能改
 
 
+std::ifstream f(path, std::ios::binary | std::ios::ate)
+std::ios::ate
+ate = at end，打开文件后，立即把文件读指针定位到文件末尾。
+注意：ate 只是初始位置在末尾，之后你仍然可以 seekg 到任意位置读写。
+它和 std::ios::app 不同：app 是每次写操作前都强制定位到末尾，只影响写；ate 只影响打开时的初始位置。
+
+
+tellg 
+是 C++ 输入文件流（std::ifstream / std::istream）的成员函数，作用是：返回当前读指针（get pointer）的位置（偏移量）。
+te 让读指针打开后就在文件末尾，tellg() 返回的就是文件总字节数。
+这是 tellg 最常见的用法之一
+
+
+std::ofstream用于写文件操作，
+而std::ifstream用于读文件操作
+std::ios::trunc 用于在打开文件时清空其内容。如果文件存在，会被截断为长度 0
+
+
+std::streamsize 是 C++ 输入/输出库中定义的一种有符号整数类型，
+用于表示 I/O 操作中传输的字符数或 I/O 缓冲区的大小。它被定义在头文件 <ios> 中，
+通常作为 std::size_t 的有符号对应类型
+
+
+int main(int argc, char* argv[])
+这是 C/C++ 程序接收命令行参数的标准入口签名。
+int argc	argument count：命令行参数的个数。
+char* argv[]	argument vector：参数字符串数组（等价于 char** argv）
+
+假设在终端敲：
+./copy_single test.bin out.bin
+程序启动时操作系统把这个命令行切分成"以空白分隔的 token"，装进 argv：
+argc = 3
+argv[0] = "./copy_single"   ← 程序自身路径/名字（不是第一个参数！）
+argv[1] = "test.bin"
+argv[2] = "out.bin"
+argv[3] = nullptr           ← 数组末尾永远是空指针，即 C 字符串数组的"哨兵"
+
+
+
+对比项	std::runtime_error	                std::cerr
+是什么	异常类（std::exception 的派生类）	标准错误输出流（std::ostream 对象）
+头文件	<stdexcept>	                       <iostream>
+用途	抛出异常，中断程序流程	                输出错误信息到终端（不中断程序）
+语法	throw std::runtime_error("msg");	std::cerr << "msg" << std::endl;
+是否需要 catch	不 catch 会终止程序（调用 std::terminate）	不需要，直接输出
+能否被捕获	✅ 可以 try/catch	            ❌ 不是异常，不能被 catch
+
+
+
+std::fixed 是 C++ I/O 流中的一种格式控制操纵器，用于将浮点数以定点小数形式输出，而不是默认的科学计数法。当与 std::setprecision 搭配使用时，setprecision 会指定小数点后的位数。
+
+
+

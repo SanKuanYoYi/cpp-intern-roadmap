@@ -4,6 +4,8 @@ Release/
 build/
 x64/
 x86/
+phase03/downloader/out.bin
+phase03/downloader/test.bin
 app
 *.suo
 *.user
