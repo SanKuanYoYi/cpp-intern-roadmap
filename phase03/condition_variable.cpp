@@ -98,11 +98,30 @@ cv.wait(lk) 返回时，lk 一定持有锁。这是标准保证的。
 因为 wait 返回后你要继续检查条件（q.empty()、done），检查必须在锁里做。
 wait 帮你在返回前就重新锁上。
 
+原子性	堵住"unlock+挂起"和"notify"之间的窗口
+
 cv.wait(lk, pred) = while + wait(lk) 的封装
 wait(lk, pred) 不是"睡一次"，是"睡到 pred 为真"。
 每次醒来都必须重新检查 pred——因为醒来 ≠ 条件满足（虚假唤醒 / 错误唤醒）。
 只要 pred 为 false，就继续睡。
 只有 pred 为 true 才返回，返回时持有锁。
+
+wait(lk, pred) 的完整生命周期：
+① 进入时持有锁（unique_lock 构造时加锁）；
+② wait 内部原子地释放锁 + 挂起；
+③ 被唤醒后重新加锁；
+④ 返回时持锁，while 循环重新检查 pred。
+cv.wait 必须配 unique_lock，且条件检查必须在锁内
+
+谓词的 while 循环把虚假唤醒吞掉了——白醒一次，重新睡，不影响正确性
+wait(lk, pred) 进入 while 前会先检查一次 pred；
+如果生产者改完状态， Lost wakeup
+消费者还没进 wait，pred 检查会看到最新值 → 直接返回，根本不进入睡眠
+
+一句话：
+cv.wait(lk, pred) = "持锁 → 检查 pred → 不满足就原子解锁+挂起 → 
+被唤醒后重新加锁 → 再检查 pred → …… → 直到 pred 满足才返回（持锁）。"
+它把"虚假唤醒"、"错误唤醒"、"进入前的检查"三件事全包了
 */
 
 
@@ -164,4 +183,16 @@ int main() {
 [producer] done = true
 [consumer] queue empty and done, exit
 [main] all done
+*/
+
+/*
+AI 的一个"虚假唤醒"的生动比喻
+你在等快递（wait）。
+正常唤醒：快递员敲门（notify），你开门收件。
+虚假唤醒：没人敲门，你不知怎么自己醒了 —— 
+可能是猫碰了门铃（信号）、可能是做梦（系统乱唤醒）、可能邻居开门震到了。
+你的正确应对：醒来先看门口有没有快递（检查谓词）——没有就继续睡。
+错误的应对：一醒就以为快递到了，跑下楼去拿（直接 q.front()）——白跑还可能导致事故。
+
+while (!pred) wait; 就是"醒来先看门口"的标准做法。if (!pred) wait; 就是"一醒就跑"的错误做法。
 */

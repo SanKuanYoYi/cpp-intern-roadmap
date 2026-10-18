@@ -64,6 +64,12 @@ at ... 和 by ...：这是调用栈，直接告诉你泄漏发生在 my_program.
 ------------------------------------------------------------------------------------
 
 
+转十六进制：
+printf "0x%x\n" 12346
+#输出：0x303a
+
+
+
 
 ************************************************************************************
 ## 以下为随机场景命令使用练习 ##
@@ -294,3 +300,104 @@ ltrace：跟踪库函数调用（用户态层面），比如 strlen、malloc、p
 海量日志：一个稍微大点的 C++ 后端服务，几秒钟就能刷出几万行系统调用日志，瞬间把你的磁盘写满。排查完立刻 Ctrl+C 停掉。
 权限问题：跟踪别人的进程通常需要 root 权限
 <-->
+
+
+# top 看线程
+top -H -p <pid>
+输出：（3455）
+top - 11:08:25 up 48 min,  3 users,  load average: 0.01, 0.05, 0.07
+Threads:   6 total,   0 running,   6 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.0 us,  0.3 sy,  0.0 ni, 99.7 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st 
+MiB Mem :   3350.6 total,    226.2 free,   2055.0 used,   1349.3 buff/cache     
+MiB Swap:   3356.0 total,   2456.2 free,    899.8 used.   1295.5 avail Mem 
+
+ 进程号 USER      PR  NI    VIRT    RES    SHR    %CPU  %MEM     TIME+ COMMAND                                   
+   3455 sgyy      20   0  582996  23972  14988 S   0.3   0.7   0:04.65 vmtoolsd                                  
+   3644 sgyy      20   0  582996  23972  14988 S   0.0   0.7   0:00.00 pool-spawner                              
+   3702 sgyy      20   0  582996  23972  14988 S   0.0   0.7   0:00.00 [pango] fontcon                           
+   4053 sgyy      20   0  582996  23972  14988 S   0.0   0.7   0:00.00 gmain                                     
+   4054 sgyy      20   0  582996  23972  14988 S   0.0   0.7   0:00.00 gdbus                                     
+   4132 sgyy      20   0  582996  23972  14988 S   0.0   0.7   0:00.00 vmtoolsd                                        
+
+Threads:   6 total 说明程序（PID 3455）一共创建了 6 个线程
+PID 列 : 不是进程号，而是线程 ID（TID, Thread ID）
+S（状态）：R 表示正在运行（Running），S 表示睡眠（Sleeping）
+TIME+：该线程累计消耗的 CPU 时间。
+-H 参数就是告诉 top： task_struct（TID）给列出来。
+
+<!-->
+AI 拓展：排查 CPU 100%
+
+直接敲 top，按 P 键（按 CPU 排序），找到占用 CPU 最高的进程 PID（假设是 12345）。
+敲 top -H -p 12345，看看是哪个 TID（比如 12346）在疯狂占用 CPU（99%）。
+用 GDB 附加到这个进程上：gdb -p 12345
+(gdb) thread apply all bt
+或者直接根据 TID 找：
+(gdb) thread 12346  # 或者 info threads 找对应的十六进制
+(gdb) bt            # 查看调用栈
+
+ps -T -p <pid>：直接把该进程的所有线程及 TID 静态打印出来。
+htop：在 htop 界面里按 F2（设置），开启“显示线程树（Tree view）”，
+可以直接看到主线程下面挂了几个子线程
+<-->
+
+# gdb 调试目录下的 dead_lock.cpp 多线程
+(gdb) r
+Starting program: /home/user/app 
+[New Thread 0x7ffff7d9f640 (LWP 12346)]
+[New Thread 0x7ffff759e640 (LWP 12347)]
+Thread 1 start
+Thread 2 start
+
+#info threads ：
+  Id   Target Id                              Frame 
+* 1    Thread 0x7ffff7f71780 (LWP 7232) "app" __syscall_cancel_arch ()
+    at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+  2    Thread 0x7ffff77ff6c0 (LWP 7235) "app" futex_wait (futex_word=0x5555555591a0 <mtx_>, expected=2, 
+    private=0) at ../sysdeps/nptl/futex-internal.h:126
+  3    Thread 0x7ffff6ffe6c0 (LWP 7236) "app" futex_wait (futex_word=0x555555559160 <mtx_A>, expected=2, 
+    private=0) at ../sysdeps/nptl/futex-internal.h:126
+Id：GDB 内部的线程编号（1, 2, 3）。
+Target Id：真正的系统线程 ID（LWP 12346, 12347）。
+前面的 * 表示当前 GDB 选中的是线程 1（主线程）。
+
+
+#thread n ：
+(gdb) thread 2
+<!-->
+[Switching to thread 2 (Thread 0x7ffff77ff6c0 (LWP 7235))]
+#0  futex_wait (futex_word=0x5555555591a0 <mtx_>, expected=2, private=0) at ../sysdeps/nptl/futex-internal.h:126
+<-->
+
+(gdb) bt 
+<!-->
+#0  futex_wait (futex_word=0x5555555591a0 <mtx_>, expected=2, private=0) at ../sysdeps/nptl/futex-internal.h:126
+...........................................................................................
+#7  0x00005555555553a2 in thread1_func () at /home/sgyy/projects/cpp-intern-roadmap/phase03/dead_lock.cpp:13
+案发现场：app.cpp:13 正是 std::lock_guard<std::mutex> lockB(mtx_B);。说明线程 2 卡在尝试获取锁 B 上。
+<-->
+
+#thread apply all bt ：
+(gdb) thread apply all bt
+
+<!-->
+Thread 3 (Thread 0x7ffff759e640 (LWP 12347)):
+#0  0x00007ffff7e8b2a5 in __GI___libc_read ()
+#1  0x00007ffff7e8b6a3 in __GI___pthread_mutex_lock ()
+#2  0x000055555555539a in thread2_func () at app.cpp:20
+#3  0x00007ffff7d9fda3 in start_thread ()
+
+Thread 2 (Thread 0x7ffff7d9f640 (LWP 12346)):
+#0  0x00007ffff7e8b2a5 in __GI___libc_read ()
+#1  0x00007ffff7e8b6a3 in __GI___pthread_mutex_lock ()
+#2  0x000055555555532a in thread1_func () at app.cpp:13
+#3  0x00007ffff7d9fda3 in start_thread ()
+
+Thread 1 (Thread 0x7ffff7d9f740 (LWP 12345)):
+#0  0x00007ffff7e8d3df in __pthread_clockjoin_ex ()
+#1  0x00005555555557b0 in main () at app.cpp:29
+<-->
+
+Thread 3（对应 thread2_func）：卡在 app.cpp:20，等锁 A。
+Thread 2（对应 thread1_func）：卡在 app.cpp:13，等锁 B。
+Thread 1（主线程）：卡在 app.cpp:29，执行 t1.join() 等子线程，结果等了个寂寞。
