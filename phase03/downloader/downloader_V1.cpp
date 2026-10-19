@@ -39,6 +39,13 @@ void copy_single_thread(const std::string &src, const std::string &dst)
         // in.read(指针, 大小)：从流中无格式读取指定大小的字节，存入指针指向的内存
         // xx.data()：获取容器（如 std::vector<char> 或 std::string）的底层首地址
         // gcount() (get count)：返回上一次未格式化输入操作（如 read、get、getline 等）实际读取的字符数
+        /*
+        为什么需要它？
+        假设你分配了 1024 字节的缓冲区，调用 read 想读 1024 字节。
+        但如果文件只剩下 100 字节了，read 就会在读取 100 字节后停止。
+        如果你直接用 buf.size() 当作数据长度，就会多读取了 924 字节的无效垃圾数据。
+        只有 gcount() 才能准确告诉你：“我实际只读到了 100 字节”。
+        */
         if (got > 0)
         {
             out.write(buf.data(), got); // buf 是来源
@@ -47,6 +54,9 @@ void copy_single_thread(const std::string &src, const std::string &dst)
         }
         // ostream::write 失败时默认不会抛异常，它只是把流置成 failbit | badbit
     }
+    /*
+    while (in) 的退出，靠的是流状态的改变。当 in 从“健康”变成“不健康”时，条件为 false，循环就退出了。
+    */
 
     // 正常退出循环 = 读到 EOF。bad() 才代表 I/O 层严重错误
     if (in.bad())
@@ -101,7 +111,7 @@ dd if=/dev/urandom of=test.bin bs=1M count=100
 //count=100：复制的块数量。读 100 次，每次 1MB。
 执行 dd 之前，一定要反复确认 of= 后面的路径是个普通文件，绝对不要乱指向硬盘设备！
 
-# 编译（O2 必开，否则 fstream 开销会扭曲基线）
+# 编译（O2 必开，标准激进优化）
 g++ -O2 -std=c++17 -o copy_single copy_single.cpp
 
 # 运行

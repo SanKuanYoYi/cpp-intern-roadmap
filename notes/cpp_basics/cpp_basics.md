@@ -269,3 +269,37 @@ std::fixed 是 C++ I/O 流中的一种格式控制操纵器，用于将浮点数
 
 
 
+seekg 与 tellg 的配合
+tellg()：问当前指针在哪。
+seekg()：让指针去哪。
+
+
+
+C++ 标准库 <fstream> 提供了三个类：
+std::ifstream：读文件（Input File Stream）。
+std::ofstream：写文件（Output File Stream）。
+std::fstream：既能读又能写（双向文件流），少见
+
+ofstream 默认会清空原文件。如果你想追加内容，或者写二进制文件，必须在第二个参数指定模式：
+// 追加模式 (Append)
+std::ofstream out("log.txt", std::ios::app); 
+// 二进制模式 (Binary) - 用于存图片、结构体等
+std::ofstream out("data.bin", std::ios::binary);
+// 也可以组合使用
+std::ofstream out("log.bin", std::ios::app | std::ios::binary);
+
+常用模式速查：
+std::ios::in：读（ifstream 默认）。
+std::ios::out：写（ofstream 默认）。
+std::ios::app：追加到文件末尾，不清空。
+std::ios::trunc：如果文件存在，先清空（ofstream 默认）。
+std::ios::binary：以二进制形式读写（不做换行符转换）。
+
+AI 提示：
+文本模式（默认）：在 Windows 下，遇到 \n 会自动转成 \r\n 写入，读取时又把 \r\n 转成 \n。
+但在 Linux 下，不会有这个转换。
+二进制模式：原封不动地读写。如果你跨平台处理文件，或者读写图片、音频、结构体，
+必须加 std::ios::binary，否则数据会被悄悄修改。
+
+
+
