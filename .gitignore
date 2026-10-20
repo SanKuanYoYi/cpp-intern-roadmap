@@ -8,6 +8,7 @@ phase03/downloader/out.bin
 phase03/downloader/test.bin
 phase03/downloader/small_out.bin
 phase03/downloader/small.bin
+phase03/downloader/out_single.bin
 phase02/RAII_V2
 phase02/ptrs_V2
 phase03/downloader/downloader_V1
