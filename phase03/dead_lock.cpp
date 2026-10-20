@@ -6,7 +6,8 @@
 std::mutex mtx_A;
 std::mutex mtx_B;
 
-void thread1_func() {
+void thread1_func()
+{
     std::cout << "Thread 1 start" << std::endl;
     std::lock_guard<std::mutex> lockA(mtx_A); // 拿到 A
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -14,7 +15,8 @@ void thread1_func() {
     std::cout << "Thread 1 done" << std::endl;
 }
 
-void thread2_func() {
+void thread2_func()
+{
     std::cout << "Thread 2 start" << std::endl;
     std::lock_guard<std::mutex> lockB(mtx_B); // 拿到 B
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -22,10 +24,21 @@ void thread2_func() {
     std::cout << "Thread 2 done" << std::endl;
 }
 
-int main() {
+// void thread3_func()
+// {
+//     std::cout << "Thread 3 start" << std::endl;
+//     std::scoped_lock lk(mtx_A, mtx_B);
+//     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+//     std::cout << "Thread 3 done" << std::endl;
+// }
+
+int main()
+{
     std::thread t1(thread1_func);
     std::thread t2(thread2_func);
+    //std::thread t3(thread3_func);
     t1.join();
     t2.join();
+    //t3.join();
     return 0;
 }
