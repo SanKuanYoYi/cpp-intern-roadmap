@@ -15,12 +15,13 @@ recv() / send()：在这个新连接上接收和发送数据（进行对话）�
 close()：关闭连接（挂断电话）。
 */
 #include <cerrno>
-#include <cstring> //memset
-#include <iostream>
+#include <cstdio>
+#include <cstring>      //memset
+#include <fcntl.h>      //  open
 #include <netinet/in.h> //IPv4 专用地址结构 + 字节序
 #include <string>
 #include <sys/socket.h> //socket 核心 API + 通用地址结构 + 地址族
-#include <fcntl.h> //  open
+#include <sys/types.h>
 #include <unistd.h> //  close
 
 int main() {
@@ -102,8 +103,8 @@ int main() {
   ssize_t n = recv(connfd, buf, sizeof(buf) - 1, 0);
   if (n < 0) {
     perror("recv");
-    close(connfd);
-    close(listenfd);
+    close(connfd);   // 关闭这条连接
+    close(listenfd); // 停止监听
     return 1;
   }
 
@@ -117,10 +118,23 @@ int main() {
   buf[n] = '\0';
   printf("[server] recv %zd bytes: %s\n", n, buf);
 
+  // ---------- 6. send() ----------
+  std::string replay = std::string("echo: ") + buf;
+  ssize_t sent = send(connfd, replay.data(), replay.size(), 0);
+  if (sent < 0) {
+    perror("send"); // 严格说 send 可能部分发送，需要循环；
+  } else {          // demo 小字节以内一般一次发完，这里从简
+    printf("[server] sent %zd bytes\n", sent);
+  }
+
+  // ---------- 7. close() ----------
+  close(connfd);   // 挂断这条连接（发 FIN，四次挥手开始）
+  close(listenfd); // 停止监听
+
   return 0;
 }
 
-// 以下为文档资料，供于查看：
+// 以下为 AI 文档资料，供于查看：
 /*
 Socket
 fd（套接字文件描述符）是用于标识网络套接字的整数句柄，用于在程序中进行网络通信。
@@ -366,4 +380,251 @@ accept 队列非空 → 立即取队头，返回 connfd
 accept 队列为空 → 阻塞，等内核通知"有新连接进入队列"
 
 accept 返回的 fd 是全新 fd，和 listenfd 无关
+
+
+ssize_t recv(int sockfd, void *buf, size_t len, int flags);
+sockfd	连接 socket（connfd），不是 listenfd
+buf	接收缓冲区（用户态内存）
+len	缓冲区大小，最多收这么多字节
+flags	行为标志，0 = 常规阻塞接收
+返回值是 ssize_t（有符号），因为要表达"负数错误"：
+
+返回值	语义	处理
+> 0	实际收到的字节数（可能小于 len）	处理这 n 字节
+0	对端正常关闭连接（收到 FIN）	关闭 connfd
+-1	错误	看 errno 决定
+recv 返回 n > 0 时，它只保证"拿到了 n 字节"，不保证"这就是对端发出的全部"。
+对端可能发了 1000 字节，recv 只返回 200
+
+ssize_t n = recv(connfd, buf, sizeof(buf) - 1, 0);
+为什么传 sizeof(buf) - 1 而不是 sizeof(buf)
+因为下一行要 buf[n] = '\0'——给字符串终止符留一个位置
+如果传 sizeof(buf)（1024），对端正好发 1024 字节，recv 返回 n=1024，
+再 buf[1024]='\0' 就越界写（数组下标 0~1023）
+
+recv 失败不等于"连接挂了"
+errno 决定处理方式：
+errno	含义	处理策略
+EINTR	被信号打断	✅ 应该重试（这里没有，见 3.3）
+EAGAIN/EWOULDBLOCK	非阻塞模式下暂时无数据	⏳ 稍后再试（事件循环）
+其他可能是bug
+
+为什么这里同时关 connfd 和 listenfd
+因为是"接受一个连接就退出"的 demo。
+生产服务器不会这样——recv 出错只关这条连接，listenfd 继续用（循环 accept
+下一个客户端） 顺序很重要：先关 connfd 再关 listenfd，虽然 demo
+里没区别，但语义上先断业务连接再停监听，逻辑更顺。 真实服务器里 connfd 会被
+close，listenfd 是程序末尾才关
+
+这里没有 EINTR 重试
+recv 也可能返回 EINTR，代码里没有 do...while 处理。原因
+demo 的 SIGINT 默认直接杀进程，走不到 errno == EINTR 分支
+单连接 demo，出错就直接失败退出了
+但生产代码必须重试：
+ssize_t n;
+do {
+    n = recv(connfd, buf, sizeof(buf) - 1, 0);
+} while (n < 0 && errno == EINTR);
+
+recv == 0：对端正常关闭（发了 FIN），数据已完整收完；
+必须 close，不能循环等待
+recv == -1, errno == ECONNRESET：对端强制断开（发了 RST），可能数据丢
+
+为什么要手动加 \0
+recv 不会帮你在数据末尾加 \0——它只是把字节复制到 buf，像 memcpy 一样
+
+如果收的是二进制协议（比如 protobuf 消息、图片数据）
+二进制数据里可能包含 0x00，\0 之后的内容会被 printf 丢弃
+用长度显式处理
+for (ssize_t i = 0; i < n; ++i)
+    printf("%02x ", (unsigned char)buf[i]);
+规则：buf[n]='\0' 只适用于面向字符串/文本协议的场景（HTTP、SMTP、Redis RESP
+等）。 二进制协议必须用 (buf, n) 对来处理，绝不依赖 \0
+
+TCP 字节流没有消息边界
+假设了一次 recv 就能收到对端一次 send 的全部内容——这是错的，只不过 demo
+里恰好能工作 TCP 是字节流协议，不保留消息边界。它只保证： 字节按序到达；
+不丢（除非连接异常）；
+不重复（内核自动去重）
+
+但不保证：
+"发送方几次 send，接收方就几次 recv"；
+"一次 recv 对应一次 send"；
+"recv 返回的数据量和 send 的数据量相同"
+
+拆包原因：
+内核缓冲区满（发送方 send 太快，接收方没及时读）；
+MSS（最大报文段）限制，大消息会被拆成多个 TCP 段；
+Nagle 算法攒小包；网络 MTU 分片。(了解)
+粘包原因：
+发送方连续两次 send，内核可能合并成一个 TCP 段发出（Nagle）；
+接收方 recv 调得慢，两个段都到了缓冲区，一次读出来
+
+demo 为什么没暴露
+对端只发 "hello tcp"（9 字节），远小于 1023；
+客户端 send 一次，发完立刻 recv 等回复，不发第二条；
+本地回环网络快，几乎不会拆包
+
+正确写法
+方案 1：固定长度前缀
+方案 2：分隔符
+方案 3：定长消息
+
+
+ssize_t send(int sockfd, const void *buf, size_t len, int flags);
+sockfd	连接 socket（connfd），不是 listenfd
+buf	要发送的数据指针
+len	数据字节数
+flags	行为标志，0 = 常规阻塞发送
+
+关键认知：send 返回的是"这次拷进了多少个字节"，不是"对端收到了多少"。
+send 是"把数据交给内核"，不是"把数据送到对端"。
+send 返回值 < len 是合法的
+
+它只保证"数据进了内核缓冲区"，不保证
+数据已经到了对端（可能还在网络里、在内核缓冲区里）；
+对端应用已经 recv 了；
+len 个字节全部发出去了（部分发送）
+
+std::string reply = std::string("echo: ") + buf;
+为什么用 std::string 而不是 char[]
+因为要拼接两段内容："echo: " + buf 里的内容
+
+std::string 的好处：
+自动管理内存，不用算长度；
++ 运算符天然支持拼接；
+data()/size() 直接拿到指针和长度，不依赖 \0
+（虽然 std::string 内部会维护 \0，但 send 用的是 size() 不是 strlen）
+
+为什么用 data() 而不是 c_str()
+两者在 C++11 之后完全等价。返回以 \0 结尾的 const char*
+用 data() 是因为 send 需要的是"数据 + 长度"，不需要 \0 终止——send 只发 size()
+个字节，\0 在范围内就发，不在就不发。 data() 语义更贴合"这是二进制数据"
+
+不要用 strlen(reply.c_str())
+// ❌ 对二进制数据会截断
+send(connfd, reply.c_str(), strlen(reply.c_str()), 0);
+// ✅ 用 size()，与内容无关
+send(connfd, reply.data(), reply.size(), 0);
+
+strlen 遇到 \0 就停，如果 reply 里有二进制 0x00 会少发。
+send 本来就是按长度发，用 size() 才是正解。
+
+
+flags = 0 的语义
+flags 是行为标志，常用值：
+0	常规阻塞发送
+MSG_NOSIGNAL	对端关闭时不发 SIGPIPE（Linux 专用，非常重要）
+MSG_DONTWAIT	本次调用非阻塞
+MSG_OOB	发送 TCP 紧急数据
+MSG_MORE	内核先攒着，不急着发（配合 TCP_CORK）
+
+生产代码里，flags 几乎必须带 MSG_NOSIGNAL
+
+
+生产代码必须写循环
+// ✅ 正确：循环直到发完
+size_t total = 0;
+while (total < reply.size()) {
+    ssize_t n = send(connfd, reply.data() + total, reply.size() - total,
+MSG_NOSIGNAL); if (n < 0) { if (errno == EINTR) continue;           //
+信号打断，重试 if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // 非阻塞模式：缓冲区满，稍后再试
+            continue;
+        }
+        perror("send");
+        close(connfd);
+        return -1;
+    }
+    if (n == 0) break;   // 理论上不会出现，防御性判断
+    total += n;
+}
+// 此时 total == reply.size()，全部发出
+
+
+代码里 perror 后没 close(connfd)
+不是 bug，但是个隐患——send 失败后代码继续往下走，最后统一 close(connfd);
+close(listenfd); 生产代码： if (sent < 0) { if (errno == EINTR) { 重试循环 }
+    else if (errno == EPIPE) {
+        fprintf(stderr, "[server] peer closed before reply\n");
+    } else {
+        perror("send");
+    }
+    close(connfd);
+    close(listenfd);
+    return 1;
+}
+
+
+
+SIGPIPE——send 这是 send 最大的陷阱，
+服务器 send() → 内核发现"对端已关闭"，触发 SIGPIPE
+服务器进程被 SIGPIPE 默认动作（终止）杀掉 ❌
+SIGPIPE 的默认行为是终止进程。
+
+方案 1：send 带 MSG_NOSIGNAL（推荐，Linux 专用）
+send(connfd, buf, len, MSG_NOSIGNAL);
+// 对端关闭时只返回 -1, errno=EPIPE，不发 SIGPIPE
+只影响这一次调用，不改全局。
+
+方案 2：全局忽略 SIGPIPE（跨平台）
+signal(SIGPIPE, SIG_IGN);   // 或 sigaction
+在 main 开头加一次，所有 send 都安全
+
+demo 里没处理——
+因为客户端发完 "hello" 立刻 recv 等回复，没来得及 close，服务器 send
+时对端还在，SIGPIPE 不会触发 但：客户端如果 send 后立刻 close
+不等回复，服务器就会被 SIGPIPE 杀死。
+*/
+
+/*
+listenfd 是"前台接待员"，只负责迎客，不干活；
+connfd 是"一对一专属客服"，每个客户一条专线，只负责跟这一个客户说话。
+
+listenfd 不能 recv/send —— 它只承载"连接"这个动作，不承载"数据"。
+recv(listenfd, ...) 会报 ENOTCONN。
+
+accept 返回的是新 fd，不是复用 listenfd —— 这是 TCP 服务器能并发的物理基础。
+一个 listenfd 派生 N 个 connfd，每个能独立 select/epoll 监听。
+
+close(connfd) 不影响 listenfd，也不影响别的 connfd ——
+关一个客户，其他客户照常说话； 只有 close(listenfd) 才是"整体关门歇业"。
+*/
+
+/*
+AI 拓展提示：
+
+第一梯队：面试必考、项目必处理的 5 个错误
+场景：你使用了非阻塞 Socket，调用 read/recv 读数据，或者调用 accept
+接新连接时，发现没数据可读或没连接进来。 面试考点：这根本不是真正的“错误”。在
+Epoll/Reactor 模型中，发生 EAGAIN 意味着“现在没数据，你先去忙别的，等 Epoll
+通知你再来”。你要能说出非阻塞 IO 必须处理这个错误，否则程序就挂了。
+2. EINTR（被信号中断）
+场景：你的程序在调用阻塞的 accept 或 read 时，突然来了个信号（比如
+SIGCHLD、SIGALRM），系统调用被强行打断，返回 -1 并设置 errno 为 EINTR。
+面试考点：处理方式。老道的程序员必须把网络 IO 放在一个 while 循环里，如果遇到
+EINTR，必须重新调用。如果你不处理，程序可能莫名其妙地报错退出。
+3. ECONNRESET（连接被重置，对端发 RST）
+场景：比如你正在和服务端保持长连接，但服务端突然宕机、重启，或者你发了数据给一个已经崩溃的进程，操作系统会替你发送一个
+RST 包。 面试考点：考察 TCP 状态机。当你收到 ECONNRESET，说明 TCP
+收到了对方发来的 RST。这通常意味着对方进程崩溃了，或者对方强制关闭了
+Socket（如设置了 SO_LINGER=0）。
+4. EPIPE / SIGPIPE（向已关闭的管道写数据）
+场景：客户端已经主动断开连接（发了 FIN），但你的服务端不知道，还在傻傻地往这个
+Socket 里 write/send 数据。 面试考点：这是必考题！默认情况下，Linux 会发送
+SIGPIPE 信号，直接杀死你的进程。标准做法是：在网络编程开头，必须加上
+signal(SIGPIPE, SIG_IGN); 忽略该信号，然后通过判断 send 返回的 errno == EPIPE
+来处理。如果不处理，你的高并发服务器只要有一个客户端异常断线，整个服务端就崩了。
+5. ETIMEDOUT / ECONNREFUSED（超时 / 拒绝）
+ECONNREFUSED：你连对方，对方直接给你回了
+RST。原因：对方端口根本没开（服务没启动），或者防火墙直接拒绝。对应 TCP 的 SYN
+请求没收到 ACK。
+ETIMEDOUT：你连对方，对方毫无反应，包发过去石沉大海。原因：网线断了、对方服务器挂了、或者被防火墙直接丢包了（DROP）。对应
+TCP 触发了重传机制，重传达到最大次数后放弃。
+
+第二梯队：遇到查文档即可（基本不考）
+EADDRINUSE：端口被占用（通常是你写代码时没释放端口或者服务没关）。
+EMFILE / ENFILE：文件描述符耗尽（高并发服务器常见，说明你的 ulimit -n
+不够，或者没有正确 close 导致泄露）。 EACCES / EPERM：权限不够（比如监听 1024
+以下端口）。 EHOSTUNREACH / ENETUNREACH：主机或网络不可达（路由问题）。
 */

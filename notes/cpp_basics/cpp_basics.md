@@ -303,3 +303,40 @@ AI 提示：
 
 
 
+string.append() 和 += 运算符的核心目的都是在字符串末尾追加内容。
+在绝大多数日常场景下，它们的性能完全一样，但它们的功能丰富度和底层细节有所区别
+当你需要从另一个字符串中截取一部分追加，或者使用迭代器时，append() 是不可替代的
+
+1.追加另一个字符串的子串（最常用）
+std::string base = "abcdef";
+std::string str = "123";
+// 需求：把 base 从索引 2 开始的 3 个字符（"cde"）追加到 str 后面
+// ❌ 用 += 的做法（会产生一个临时 string 对象，有性能损耗）
+str += base.substr(2, 3); 
+// ✅ 用 append 的做法（直接在原字符串后拼接，零临时对象）
+str.append(base, 2, 3); // 结果 str 变成 "123cde"
+
+2.追加指定数量的某个字符
+std::string s = "A";
+// 用 += 只能一个个加
+s += '='; s += '='; s += '='; 
+// 用 append 可以直接追加 3 个 '='
+s.append(3, '='); // 结果 s 变成 "A==="
+
+3.使用迭代器追加
+std::string s = "A";
+std::vector<char> v = {'1', '2', '3'};
+// append 支持传迭代器范围
+s.append(v.begin(), v.end()); // 结果 s 变成 "A123"
+
+对于追加整个字符串：没有差异，性能一样。
+对于追加子串：append(str, pos, len) 比 += str.substr(pos, len) 更快。
+因为 substr 会先构造一个新的临时 string 对象并分配堆内存，然后再追加；
+而 append 则是直接按长度把数据拷过去，省去了一次内存分配和构造的开销。
+
+
+
+string.size() 还是 string.length()
+完全等价——length() 是历史遗留别名，size() 更符合 STL 惯例
+
+
