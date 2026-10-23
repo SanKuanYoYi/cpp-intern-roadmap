@@ -340,3 +340,4 @@ string.size() 还是 string.length()
 完全等价——length() 是历史遗留别名，size() 更符合 STL 惯例
 
 
+
