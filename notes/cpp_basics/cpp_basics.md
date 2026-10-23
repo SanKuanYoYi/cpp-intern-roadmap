@@ -341,3 +341,18 @@ string.size() 还是 string.length()
 
 
 
+在 C++ 的 std::string 中，data() 和 c_str() 是最常用的两个成员函数，
+用来获取底层的 C 风格字符数组（char*）
+在 C++11 及之后的标准中，它们俩在功能上已经基本一样了（都保证以 '\0' 结尾）
+
+C++17
+data() 增加了一个非 const 版本，返回 char*（可读可写）。
+这意味着你可以直接通过 data() 修改字符串里的字符
+std::string s = "hello";
+char* p = s.data();
+p[0] = 'H'; // 合法！s 变成 "Hello"
+
+但 c_str() 永远只返回 const char*，只读。
+
+
+

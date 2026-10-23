@@ -1,3 +1,12 @@
+#include <arpa/inet.h>
+#include <cstdio>
+#include <cstring>
+#include <netinet/in.h>
+#include <string>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+
 /*
 AI 先行解析提示：
 
@@ -11,14 +20,6 @@ send() / recv()：连接成功后，发送和接收数据。
 close()：关闭连接。
 */
 
-#include <arpa/inet.h>
-#include <cerrno>
-#include <cstdio>
-#include <cstring>
-#include <netinet/in.h>
-#include <string>
-#include <sys/socket.h>
-#include <unistd.h>
 
 int main() {
   // ---------- 1. socket() ----------
@@ -50,8 +51,35 @@ int main() {
   }
   printf("[client] connected to 127.0.0.1:8080\n");
 
-  
+  // ---------- 3. send() ----------
+  const std::string msg = "Hello TCP";
+  ssize_t sent = send(sockfd, msg.data(), msg.size(), 0);
+  if (sent < 0) {
+    perror("send");
+    close(sockfd);
+    return -1;
+  }
+  printf("[client] sent: %s\n", msg.c_str());
 
+  // ---------- 4. recv() ----------
+  char buf[1024];
+  ssize_t n = recv(sockfd, buf, sizeof(buf) - 1, 0);
+  if (n < 0) {
+    perror("recv");
+    close(sockfd);
+    return -1;
+  }
+  if (n == 0) {
+    printf("[client] server closed before replying\n");
+    close(sockfd);
+    return 0;
+    // return -1;
+  }
+  buf[n] = '\0';
+  printf("[client] reply: %s\n", buf);
+
+  // ---------- 5. close() ----------
+  close(sockfd);
   return 0;
 }
 
@@ -210,5 +238,114 @@ connect 成功并不代表"服务器 accept 了"！
 connect 时内核已经复制了地址信息，之后改用户态结构体不影响连接。
 要连别的服务器必须换 socket。
 
+send(sockfd, msg.data(), msg.size(), 0);
+"hello tcp" 里没有 \n
+服务器的 recv 收到 "hello tcp"，buf[n] = '\0' 后 buf 就是合法 C 字符串 "hello
+tcp"（不含 \n）。 服务器 printf("[server] recv %zd bytes: %s\n", n, buf) 会输出
+[server] recv 9 bytes: hello tcp
 
+如果客户端加 \n（"hello tcp\n"，10 字节），服务器打印时会多一行
+（\n 被打印，然后 printf 自己又加一个 \n）
+[server] recv 10 bytes: hello tcp
+                          ← 这里有个空行（因为 buf 里有 \n）
+
+msg.data() vs msg.c_str()
+send(sockfd, msg.data(), msg.size(), 0);
+//          ↑ 和 c_str() 效果一样（C++11 后）
+C++11 起 data() 和 c_str() 完全等价——都返回 const char*，都保证 \0 结尾。
+send 只发 size() 个字节，\0 在不在范围内都不影响发送（因为 send 按长度发，不认
+\0）。
+
+msg.size() 而不是 strlen()
+size() 是 O(1)（std::string 内部维护长度）；strlen() 是 O(n)（要扫描到 \0）。
+而且如果 msg 里有 \0，strlen 会截断。
+size() 是唯一正确写法
+
+flags = 0 ——客户端的特殊考量
+flags = 0
+在客户端几乎总是没问题——因为客户端通常是主动方，不会先收到"对端关闭"的信号。
+但理论上，如果服务器先 close，客户端再 send 也会触发 SIGPIPE。
+稳健的客户端也带 MSG_NOSIGNAL
+
+注意 EINTR 这里也没处理——和服务器端一样是 demo 简化。
+生产代码要 do...while (errno == EINTR)
+
+
+close(sockfd)
+服务器端：close(connfd) 和 close(listenfd) 在 send 之后统一执行，所以 send
+失败后继续往下走也能正常关闭—— 不泄漏，但语义不严谨（应该立即失败退出）
+客户端：close(sockfd) 是唯一一次关闭，
+如果 send 失败后不关，sockfd 就泄漏了——必须在错误分支里关。
+
+客户端 sockfd 从头管到尾，每个错误分支都要关；
+服务器 connfd 在步骤 6 和 7 之间统一关闭，错误分支可以"继续往下走"。
+生产代码应该两边都严格——每个错误分支明确 close，不依赖"后面会关"
+
+代码只处理了 sent < 0，没处理"部分发送"
+"hello tcp" 9 字节，远小于内核发送缓冲区，一次必定发完——所以 demo 里不会暴露
+和服务器端 send 一样——生产代码必须循环
+
+printf("[client] sent: %s\n", msg.c_str());
+为什么打印 msg 而不是 sent 字节数
+printf("[client] sent: %s\n", msg.c_str());   // 客户端
+printf("[server] sent %zd bytes\n", sent);    // 服务器
+客户端打印"发送了什么内容"，服务器打印"发送了多少字节"。
+两种都是合理的调试信息
+取决于调试需求。生产里通常两者都打
+
+send 返回成功只是"交给内核了"，数据可能还在网络里、可能还在内核缓冲区里。
+要确认对端收到，必须等对端的 ACK 或应用层回复——这就是紧接着 recv 的作用
+
+客户端 send 后如果不等 recv 就 close，服务器收到 FIN 时可能已经准备 send
+了，触发 EPIPE / SIGPIPE。 服务器的 SIGPIPE 风险就是这么来的
+
+recv()
+维度	客户端	服务器
+n == 0 的含义	服务器没回就关了（异常）	客户端发完关了（正常）
+n == 0 的日志	"server closed before replying"	"peer closed"
+return 0 还是 1	0（有争议，见后面）	0
+错误时额外 close	只 close sockfd	close connfd + listenfd
+
+客户端 n == 0 是异常场景（"我请求发出去了，你连回复都不给就挂"），
+服务器 n == 0 是正常场景（"客户端聊完自己走了"）。
+
+正常情况下客户端根本不该收到 0
+正常情况下客户端 recv 拿到的是 "echo: hello tcp"，n > 0，然后自己关。
+n == 0 意味着服务器在回复之前就关连接了
+n == 0 是永久状态——对端已经关闭，recv 永远返回 0。必须 break / close / return。
+n == 0 return 0 还是 return 1——这是个设计判断
+如果客户端是"能连上就算成功"——连上了、发请求了、服务器挂了没回，但"整个流程走过一遍"，可以算"正常结束"；
+如果客户端是"必须拿到回复才算成功"——那服务器没回就是失败，应该 return 1
+
+
+客户端的阻塞模型——请求-响应模式
+服务器视角——"被动等待"
+服务器的 recv
+没有"什么时候该收到数据"的预期——客户端可能立刻发，也可能永远不发（客户忘了点发送按钮）。
+所以阻塞是合理的——服务器就是"随时待命"
+
+客户端视角——"主动等待承诺的回复"
+客户端的 recv 有明确的"预期时间"——我刚发出去请求，回复应该在 RTT +
+服务器处理时间 内到。 如果等了 30 秒还没到，那大概率出问题了——这就是为什么客户端
+recv 通常要设超时。 代码里没有超时——这是 demo 简化 生产代码必须设超时
+
+代码只区分了 n == 0 和 n < 0，没细究 errno——demo 简化。
+生产里 ECONNRESET 和 n == 0 要分开处理，因为：
+n == 0：对端有序关闭，已收到的数据是完整的；
+ECONNRESET：对端强制断开，可能有数据在缓冲区里没读出来。
+*/
+
+
+/*
+# 终端 1：起服务器
+./tcp_server_basic
+
+# 终端 2：确认监听（新系统 netstat 已被 ss 取代，两个都能用）
+netstat -tunlp | grep 8080
+# 输出形如：tcp  0  0 0.0.0.0:8080  0.0.0.0:*  LISTEN  12345/./tcp_server_basic
+ss -tlnp | grep 8080        # 等价命令
+
+# 终端 3：发消息
+./tcp_client_basic
+# 客户端打印: reply: echo: hello tcp
 */

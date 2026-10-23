@@ -1,3 +1,13 @@
+#include <cerrno>
+#include <cstdio>
+#include <cstring>      //memset
+#include <fcntl.h>      //  open
+#include <netinet/in.h> //IPv4 专用地址结构 + 字节序
+#include <string>
+#include <sys/socket.h> //socket 核心 API + 通用地址结构 + 地址族
+#include <sys/types.h>
+#include <unistd.h> //  close
+
 /*
 AI 先行解析提示：
 
@@ -14,15 +24,6 @@ accept()：阻塞等待，直到有客户端连接进来，
 recv() / send()：在这个新连接上接收和发送数据（进行对话）。
 close()：关闭连接（挂断电话）。
 */
-#include <cerrno>
-#include <cstdio>
-#include <cstring>      //memset
-#include <fcntl.h>      //  open
-#include <netinet/in.h> //IPv4 专用地址结构 + 字节序
-#include <string>
-#include <sys/socket.h> //socket 核心 API + 通用地址结构 + 地址族
-#include <sys/types.h>
-#include <unistd.h> //  close
 
 int main() {
 
@@ -278,11 +279,12 @@ sin_zero 是填充字段，内核理论上会忽略它
 或者：struct sockaddr_in servaddr = {};（C++ 全零初始化）再赋值——效果一样
 
 bind 调用
-bind(listenfd, reinterpret_cast<struct sockaddr *>(&serveraddr),
-sizeof(serveraddr)) ① 第一个参数：listenfd 就是前面 socket()
-返回的文件描述符。此刻它还是 CLOSED 状态 ② 第二个参数：reinterpret_cast<struct
-sockaddr*>(&servaddr) bind 的原型形参类型是通用结构体 sockaddr，不是
-sockaddr_in。 用户填好专用的 sockaddr_in（16 字节，字段清晰）
+bind(listenfd, reinterpret_cast<struct sockaddr
+*>(&serveraddr),sizeof(serveraddr)) ① 第一个参数：listenfd 就是前面 socket()
+返回的文件描述符。此刻它还是 CLOSED 状态
+② 第二个参数：reinterpret_cast<structsockaddr*>(&servaddr)
+bind 的原型形参类型是通用结构体 sockaddr，不是sockaddr_in。
+用户填好专用的 sockaddr_in（16 字节，字段清晰）
 指针强转（只是在类型系统里"换脸"，内存一个字节都不动）
 传给 bind 的 sockaddr*（16 字节，黑盒）
 内核根据 sa_family 字段，内部再强转回 sockaddr_in 解析
@@ -412,7 +414,8 @@ EAGAIN/EWOULDBLOCK	非阻塞模式下暂时无数据	⏳ 稍后再试（事件�
 为什么这里同时关 connfd 和 listenfd
 因为是"接受一个连接就退出"的 demo。
 生产服务器不会这样——recv 出错只关这条连接，listenfd 继续用（循环 accept
-下一个客户端） 顺序很重要：先关 connfd 再关 listenfd，虽然 demo
+下一个客户端）
+顺序很重要：先关 connfd 再关 listenfd，虽然 demo
 里没区别，但语义上先断业务连接再停监听，逻辑更顺。 真实服务器里 connfd 会被
 close，listenfd 是程序末尾才关
 
@@ -627,4 +630,19 @@ EADDRINUSE：端口被占用（通常是你写代码时没释放端口或者服�
 EMFILE / ENFILE：文件描述符耗尽（高并发服务器常见，说明你的 ulimit -n
 不够，或者没有正确 close 导致泄露）。 EACCES / EPERM：权限不够（比如监听 1024
 以下端口）。 EHOSTUNREACH / ENETUNREACH：主机或网络不可达（路由问题）。
+*/
+
+
+/*
+# 终端 1：起服务器
+./tcp_server_basic
+
+# 终端 2：确认监听（新系统 netstat 已被 ss 取代，两个都能用）
+netstat -tunlp | grep 8080
+# 输出形如：tcp  0  0 0.0.0.0:8080  0.0.0.0:*  LISTEN  12345/./tcp_server_basic
+ss -tlnp | grep 8080        # 等价命令
+
+# 终端 3：发消息
+./tcp_client_basic
+# 客户端打印: reply: echo: hello tcp
 */
