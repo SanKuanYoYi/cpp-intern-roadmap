@@ -30,3 +30,4 @@ phase03/downloader/downloader_V3
 phase04/tcp_server_basic
 phase04/tcp_client_basic
 phase04/tcp_server_multi
+phase04/http_server

@@ -136,6 +136,33 @@ wc -c test.bin
 104857600 test.bin
 
 
+重定向（Redirect）是指将用户或浏览器的请求从一个URL自动转向另一个URL的技术，用于网页跳转、URL更改或访问控制等场景。
+
+
+curl [options] [URL...]
+1.最基础的用法：GET 请求
+curl https://www.baidu.com
+2.常用核心功能（开发高频）
+① 保存输出到文件
+curl -o output.html https://www.baidu.com     # 保存为 output.html（如果文件存在则覆盖）
+curl -O https://example.com/file.zip          # 直接使用服务器上的原文件名保存
+② 跟随重定向（-L）
+如果服务器返回 301/302 重定向，curl 默认不会自动跳转，加上 -L 即可：
+③ 发送 POST 请求（-X POST 与 -d）
+④ 添加请求头（-H）
+3.调试与排查（排查网络问题必备）
+① 查看详细的请求与响应过程（-v）
+-v (verbose) 会打印出 curl 是如何解析 DNS、建立 TCP 连接、发送 HTTP 请求头、接收响应头的全过程。
+（面试常考：curl -v 可以看 TCP 握手过程）
+② 只看响应头（-I）
+如果只想看服务器返回的 HTTP 状态码和 Header 信息（常用于测试接口是否存活、跨域配置是否正确），
+使用 -I（大写 i，表示 HEAD 请求）
+③ 只看状态码（-s -o /dev/null -w "%{http_code}"）
+4.进阶配置
+① 限制超时时间
+② 处理 HTTPS 证书警告
+③ 带 Cookie 请求
+④ 走代理
 
 
 ************************************************************************************
