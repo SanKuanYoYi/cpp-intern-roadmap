@@ -627,5 +627,11 @@ Connection: close 是"一种更简单的协议模式"——一条连接只服务
 
 浏览器除了 GET /index.html 还会发什么？
 访问 http://127.0.0.1:8080/index.html 后，浏览器会自动发第二个请求
-是标签页的小图标。如果服务器没有这个文件，会返回 404
+[http] listening on 0.0.0.0:8080, root=.
+[http] request line: GET /index.html HTTP/1.1
+[http] 200 /index.html (293 bytes)
+[http] request line: GET /favicon.ico HTTP/1.1
+[http] 404 /favicon.ico
+
+请求的是标签页的小图标。如果服务器没有这个文件，会返回 404——这完全正常，不是 bug。
 */
