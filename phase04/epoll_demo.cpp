@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <asm-generic/socket.h>
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
@@ -8,6 +9,7 @@
 #include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 // 循环发完所有字节
@@ -91,6 +93,82 @@ int main() {
   struct epoll_event events[64]; // 一次最多取 64 个就绪事件
 
   // ---------- 4. 事件循环 ----------
+  while (true) {
+    // -1 表示无限等待；返回就绪事件个数
+    int nready = epoll_wait(epfd, events, 64, -1);
+    if (nready < 0) {
+      if (errno == EINTR)
+        continue;
+      perror("epoll_wait");
+      break;
+    }
+
+    for (int i = 0; i < nready; i++) {
+      int fd = events[i].data.fd;
+      uint32_t evs = events[i].events;
+
+      if (fd == listenfd) {
+        // ---------- listenfd 可读 = 有新连接 ----------
+        while (true) { // 循环 accept 到 EAGAIN
+          int connfd = accept(listenfd, nullptr, nullptr);
+          if (connfd < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+              break;
+            if (errno == EINTR)
+              continue;
+            perror("accept");
+            break;
+          }
+          set_nonblocking(connfd); // 连接也设非阻塞
+
+          struct epoll_event cev;
+          cev.events = EPOLLIN;
+          cev.data.fd = connfd;
+
+          if (epoll_ctl(epfd, EPOLL_CTL_ADD, connfd, &cev) < 0) {
+            perror("epoll_ctl ADD connfd");
+            close(connfd);
+          } else {
+            printf("[epoll] new conn fd=%d\n", connfd);
+          }
+        }
+      } else {
+        // ---------- connfd 可读 = 有数据 / 对端关闭 ----------
+        char buf[1024];
+        ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
+
+        if (n < 0) {
+          if (errno == EAGAIN || errno == EWOULDBLOCK)
+            continue;
+          if (errno == EINTR)
+            continue;
+          perror("recv");
+          epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
+          close(fd);
+          continue;
+        }
+        if (n == 0) {
+          printf("[epoll] fd=%d peer closed\n", fd);
+          epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
+          close(fd);
+          continue;
+        }
+        buf[n] = '\0';
+        printf("[epoll] fd=%d recv %zd bytes: %s\n", fd, n, buf);
+
+        std::string reply = std::string("echo: ") + buf;
+        send_all(fd, reply);
+
+        // demo 约定：一条连接处理一次就关
+        epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
+        close(fd);
+      }
+    }
+  }
+
+  close(epfd);
+  close(listenfd);
+  return 0;
 }
 
 /*
@@ -171,7 +249,8 @@ F_SETFL：用新值替换文件状态标志。
 因为 F_SETFL 是"整体替换"，不是"追加位"。直接传 O_NONBLOCK 会清掉所有其他标志——
 比如 fd 原来是 O_RDWR | O_APPEND，传进去之后就只剩 O_NONBLOCK
 了，读写权限、追加语义全丢 正确姿势：先读原值 → 修改某一位 →
-写回。这是"改文件标志"的标准模板：
+写回。
+这是"改文件标志"的标准模板
 
 同理取消非阻塞：
 int flags = fcntl(fd, F_GETFL, 0);
@@ -193,6 +272,7 @@ ssize_t n = recv(fd, buf, len, 0);
 
 
 为什么 epoll 必须非阻塞
+
 这才是理解 set_nonblocking 的关键——epoll 和阻塞 fd 一起用可能出严重问题。
 场景 1：listenfd 必须非阻塞——否则 accept 卡死
 为什么循环 accept？
@@ -213,14 +293,24 @@ ET 下必须"循环读到 EAGAIN"——而 EAGAIN 只有非阻塞 fd 才会返�
 非阻塞：返回 EAGAIN，可以先攒起来，等 EPOLLOUT 事件再发。
 demo 里响应小不会触发，但生产服务器必须处理。
 
-EPOLLOUT 是什么
-EPOLLOUT = "这个 fd 现在可以写数据了"——发送缓冲区有空间，send 不会阻塞。
-非阻塞 + EPOLLOUT 的做法（正确但复杂）:
-发不完的数据先存起来（pending 缓冲区），不要阻塞等
-注册 EPOLLOUT，告诉内核"这个 fd 可写时通知我"；
-事件循环继续跑，处理其他连接；
-收到 EPOLLOUT 时，继续从 pending 里发剩余数据；
-发完了就 去掉 EPOLLOUT——否则 LT 下会一直报"可写"，空转
+
+注册 EPOLLIN 表示：当这个 fd 上有数据可读，或者出现某些“可读”状态时通知我。
+常见触发场景：
+普通 socket 收到数据：接收缓冲区非空，read/recv 能读到数据。
+对端关闭连接：read 会返回 0，这也会触发 EPOLLIN。所以读到 0 要关闭连接。
+监听 socket 有新连接：监听 fd 注册 EPOLLIN，触发后调用 accept。
+
+注册 EPOLLOUT 表示：当这个 fd 的发送缓冲区有空间，可以写数据时通知我。
+常见场景：
+普通 socket 发送缓冲区有空间：可以继续 write/send。
+非阻塞 connect 完成：连接建立成功或失败后，fd 通常会变成可写，触发 EPOLLOUT。
+此时要用 getsockopt(fd, SOL_SOCKET, SO_ERROR, ...) 判断连接是否成功。
+写缓冲从满变为可写：之前 send 返回 EAGAIN，等 EPOLLOUT 后再继续发。
+
+不要一直关注 EPOLLOUT
+EPOLLIN 通常常驻关注；
+EPOLLOUT 按需开启：有数据要发但没发完时再关注，发完后取消关注。
+ET 模式下必须读到 EAGAIN / 写到 EAGAIN
 
 为什么 demo 不用 EPOLLOUT
 "echo: " + buf，最多 1KB 左右——远小于内核发送缓冲区
@@ -316,6 +406,7 @@ demo 用 data.fd —— 最简单
 生产用 data.ptr —— 最灵活
 
 
+
 epoll_ctl(epfd, EPOLL_CTL_ADD, listenfd, &ev) 四个参数
 int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
 
@@ -389,4 +480,242 @@ struct epoll_event cev;   // connfd 用
 其实可以复用——因为 epoll_ctl
 注册完就丢了——但用不同变量名让代码更清晰——一眼看出"这是给连接用的"。
 
+
+uint32_t evs = events[i].events;
+把"这个 fd
+上实际发生了哪些事件"这个位图取出来，存到一个临时变量里，方便后面按位检查。
+events[i].events 是内核填的位图（bitmask）——每一位代表一种事件，一个 fd
+可能同时发生多种事件。
+
+struct epoll_event {
+    uint32_t     events;   // ← 就是这个字段
+    epoll_data_t data;
+};
+
+events 是一个 32 位无符号整数，每一位（bit）代表一种事件类型。
+不是"一个事件"，是"一组事件的组合"。
+位图的本质：
+events = 0x00000001   →  二进制 0000...0001  →  只置了 bit0  →  EPOLLIN
+events = 0x00000005   →  二进制 0000...0101  →  bit0 + bit2  →  EPOLLIN |
+EPOLLERR events = 0x00000010   →  二进制 0000...10000 →  bit4         → EPOLLHUP
+一个 fd 可能同时发生多个事件——比如"可读 + 对端挂断"、"可读 + 出错"。
+所以这个字段是"或"的关系，不是"等于"某一个值
+events 字段的类型就是 uint32_t——用同类型接，是最自然的
+
+为什么不直接用 events[i].events，非要存个临时变量？.
+events[i].events 太长了——每次写要打 18 个字符；evs 只 3
+个字符——循环体内多次检查时，短名字更好读。
+
+
+关键理解：== 是错的，& 才对
+// ❌ 错误：以为 events 只可能是 EPOLLIN
+if (events[i].events == EPOLLIN) {
+    // 只有"恰好只发生了 EPOLLIN"才进入
+    // 如果对端同时关了连接（EPOLLIN | EPOLLHUP），就走不进来！
+}
+// ✅ 正确：位图用按位与检查
+if (events[i].events & EPOLLIN) {
+    // 只要 EPOLLIN 这一位被置了，就进入
+    // EPOLLIN | EPOLLHUP 也满足
+}
+按位与的语义："只检查我关心的那一位，其他位不管"——这才是"位图"的用法。
+
+
+events 数组的每个元素 = 一个"就绪的 fd + 它发生了什么"。
+为什么一次会返回"多个"
+因为可能有多条连接同时有事。
+3 个客户端几乎同时连进来：或者 3 个已有连接同时发数据：
+一次 epoll_wait 返回多个事件"的本质——多个 fd 同时就绪。
+
+for 循环里的"每个元素"到底是什么意思
+i	events[i].data.fd	events[i].events	含义
+0	listenfd	EPOLLIN	有新连接
+1	connfd=5	EPOLLIN	5 号连接有数据
+2	connfd=6	EPOLLIN | EPOLLHUP	6 号连接有数据，且对端关了
+每个 i = 一个"独立的事件"
+if (fd == listenfd) 就是"看单子上这一项是哪个柜子"——是监听 socket 就走 accept
+分支，是连接 socket 就走 recv 分支。
+
+
+"多个事件"有两种含义——别混
+层次 1：events 数组里有多个元素（多个 fd 就绪）
+nready = 3 表示数组前 3 个有效。这是"多个 fd"——for 循环遍历。
+层次 2：单个 events[i].events 里有多位（同一 fd 多个事件）
+这是"同一个 fd 的多个事件"——用 & 按位检查。
+
+最简单的例子——两个客户端同时发消息
+服务器跑着 epoll_demo，两个 tcp_client_basic 几乎同时发 "hello tcp"：
+时刻 T0：客户端 A 的数据到达 connfd=5
+时刻 T1：客户端 B 的数据到达 connfd=6
+时刻 T2：服务器调用 epoll_wait
+epoll_wait 返回 nready = 2
+events[0] = { fd=5, events=EPOLLIN }    ← A 的数据
+events[1] = { fd=6, events=EPOLLIN }    ← B 的数据
+for 循环：
+i = 0:
+    fd = 5
+    recv(5) → "hello tcp"
+    send(5, "echo: hello tcp")
+    close(5)
+i = 1:
+    fd = 6
+    recv(6) → "hello tcp"
+    send(6, "echo: hello tcp")
+    close(6)
+
+
+events[i].events 和你注册的 ev.events 的关系
+events 字段是"实际发生"——可能比注册的多（EPOLLERR / EPOLLHUP 自动上报）；
+可能比注册的"少"——你注册了 EPOLLIN，但这次只发生
+EPOLLHUP（比如对端异常关闭，没数据可读）； 所以生产代码要按优先级检查： if (evs
+& EPOLLERR) {
+    // 错误优先：连接出错了，先处理
+    getsockopt(...);   // 看具体错误
+    // 通常直接 close
+}
+if (evs & EPOLLHUP) {
+    // 挂断：对端完全关闭，直接 close
+    // 注意：EPOLLHUP 和 EPOLLIN 可能同时出现——缓冲区里还有数据要读
+}
+if (evs & EPOLLIN) {
+    // 可读：recv
+}
+if (evs & EPOLLOUT) {
+    // 可写：send pending 数据
+}
+注意顺序：先 revc读、EPOLLERR，再 EPOLLHUP，最后 EPOLLIN——
+因为出错的 fd 的 recv 结果不可信，先处理错误更安全。
+或客户端 send() 然后立刻 close() 会 if (evs & EPOLLHUP) 丢了。
+
+注意：demo 取了 evs 但没用——这是代码的一个"预留"——
+在真实生产里，evs 会用于多处判断——demo 只处理 EPOLLIN，省了检查。
+
+
+ev 和 cev 两个 epoll_event 变量详解
+ev 是给 listenfd 注册时用的临时配置，cev 是给每个 connfd 注册时用的临时配置
+两个变量内容几乎一样（都是 EPOLLIN），分开命名纯粹是为了"代码意图清晰"
+
+ev —— 只出场一次，给 listenfd 注册
+作用域：main 函数里，while 循环之前——只构造一次，只注册一次。
+cev —— 在 accept 循环里，每个新连接用一次
+作用域：while 循环体内——每次新连接都构造一次，注册完就丢。
+
+为什么分成两个变量，而不是一个
+①作用域不同——ev 在循环外，cev 在循环内
+作用域越窄越好是 C++ 的基本纪律。
+② 命名区分
+③能用一个变量，改 fd 就行
+epoll_ctl(epfd, EPOLL_CTL_ADD, listenfd / connfd , &ev);   // 注册 fd
+但代码可读性变差：
+④一个"变量被多线程共享"时，是数据竞争——后果不可预测
+生产代码可能更倾向：
+变体 1：用统一的"注册函数"
+变体 2：用 data.ptr 而非 data.fd
+demo 不展示
+
+
+close(fd) 前必须 epoll_ctl(EPOLL_CTL_DEL, fd)
+顺序不能反——先 close 再 DEL 会失败（ENOENT），而且已经留下了"幽灵————
+旧 fd 的注册信息"寄生"在了新 fd 上——后果不可预测。
+*/
+
+
+
+
+/*
+AI 拓展：
+
+select、poll、epoll 的区别？
+三者都是 I/O 多路复用——同时监听多个
+fd，哪个就绪就处理哪个。差异在实现机制和性能特征：
+
+作为了解：
+维度	select	poll	epoll
+数据结构	fd_set 位图（固定大小）	pollfd 数组（动态）	内核红黑树 +
+就绪链表 最大 fd 数	1024（FD_SETSIZE，编译期固定）	无硬上限（受系统 fd
+限制）	无硬上限 每次调用数据传递	全量 fd_set 用户态→内核态拷贝	全量
+pollfd 数组拷贝	只在注册时拷贝一次（epoll_ctl） 内核扫描	每次 select O(n)
+线性扫描所有 fd	每次 poll O(n) 线性扫描	内核回调机制，O(1) 返回就绪链表 返回后
+用户要重新 FD_ZERO + FD_SET	要重置 revents	不需要重置（除非关注事件变了）
+触发模式	只有水平触发	只有水平触发	支持 LT 和 ET
+fd 类型	只支持 socket（fd < 1024）	支持任意 fd	支持任意 fd
+
+一句话：select 是"老式电话簿"，每次要逐页翻；
+poll 是"改进的目录"，但没有根本改；
+epoll 是"事件订阅系统"，注册一次，数据到了才通知。
+
+
+
+// ET 模式下必须循环读到 EAGAIN
+while (true) {
+    ssize_t n = recv(fd, buf, sizeof(buf), 0);
+    if (n > 0) {
+        // 处理数据，继续读
+    } else if (n == 0) {
+        break;  // 对端关闭
+    } else {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) break;  // 读干净了
+        if (errno == EINTR) continue;
+        // 错误
+        break;
+    }
+}
+
+// LT 模式下一次读一部分也行，下次还会通知
+ssize_t n = recv(fd, buf, sizeof(buf), 0);
+if (n > 0) {
+    // 处理数据（下次 epoll_wait 还会报）
+}
+
+
+
+为什么 epoll 比 select 快？
+① 数据拷贝：select 每次全量拷贝，epoll 只拷贝一次
+注册一次，后续零拷贝——这是 epoll 的第一个性能优势。
+② 内核扫描：select 是 O(n) 轮询，epoll 是 O(1) 取就绪
+epoll 内核实现：注册时，每个 fd 挂一个回调函数
+数据到达 → 内核直接回调 → 把 fd 加入就绪链表；
+epoll_wait 只需读就绪链表——O(就绪数)。
+③ 无 fd 数量限制
+select 的 FD_SETSIZE = 1024（编译期固定，改它要重新编译 libc）；
+epoll 无硬上限——只受系统 ulimit -n 限制。
+
+
+
+demo 用的是 LT 还是 ET？为什么？
+用的是 LT（水平触发）
+//ev.events  = EPOLLIN;           // ← 没有 EPOLLET 标志
+//ev.data.fd = listenfd;
+EPOLLIN 不带 EPOLLET 就是 LT。如果要用 ET，必须显式写 EPOLLIN | EPOLLET。
+
+为什么 demo 选 LT
+① 代码最简单
+② 容错性好
+demo 应该先保证正确，再谈优化。
+demo 是 recv → 回复 → 关闭"——只处理一次。LT 已经足够，ET 的"高效"在这个场景毫无意义。
+生产环境常用 ET
+*/
+
+
+/*
+# 终端 1
+./epoll_demo
+# [epoll] listening on 0.0.0.0:8080 ...
+
+# 另一个终端，跑两次客户端
+./tcp_client_basic
+./tcp_client_basic
+*/
+
+/*
+[epoll] new conn fd=5
+[epoll] fd=5 recv 9 bytes: Hello TCP
+[epoll] new conn fd=5
+[epoll] fd=5 recv 9 bytes: Hello TCP
+
+每条连接处理完立即 close——这是"一个连接一个请求"的语义——fd 用完就归还。
+所以每一次 accept 拿到的都是"当前最小可用的 fd"——如果前面的都关干净了，就永远是同一个。
+
+假设改成"处理完不 close"：// 错误示范（fd 泄漏）
+fd 增加
 */

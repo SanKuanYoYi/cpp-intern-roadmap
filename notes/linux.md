@@ -584,3 +584,104 @@ AI 解析：
 在析构时，还处于 joinable（可汇合）状态（即既没有 join 也没有 detach），
 程序就会直接调用 std::terminate() 导致崩溃
 崩溃引发了 SIGABRT（Abort 信号），系统生成了 core dumped（核心转储）
+
+
+# netstat / ss 看 TCP 连接状态
+运行 tcp_server 然后 ss -tan | grep 8080
+<!-->
+LISTEN    0      128            0.0.0.0:8080        0.0.0.0:*    
+TIME-WAIT 0      0            127.0.0.1:8080      127.0.0.1:51872
+<-->
+ss -tan 的列含义
+State   Recv-Q  Send-Q  Local Address:Port   Peer Address:Port
+
+列	含义
+State	TCP 状态
+Recv-Q	接收队列字节数（对 LISTEN 有特殊含义，见下）
+Send-Q	发送队列字节数（对 LISTEN 是 backlog 上限）
+Local Address:Port	本地地址和端口
+Peer Address:Port	对端地址和端口
+
+第一行：监听 socket
+State = LISTEN：这是一个正在监听的服务端 socket。
+Local = 0.0.0.0:8080：监听本机所有网卡的 8080 端口（IPv4）。
+Peer = 0.0.0.0:*：监听状态下没有固定对端。
+Recv-Q = 0：对 LISTEN socket，ss 里 Recv-Q 表示当前已完成三次握手、但还没被 accept() 取走的连接数（全连接队列当前长度）。
+Send-Q = 128：全连接队列的最大长度，也就是 listen(fd, backlog) 的 backlog
+所以这行说明：有个程序在 8080 上监听，当前没有堆积未 accept 的连接，backlog 上限 128。
+
+第二行：TIME-WAIT 连接
+State = TIME-WAIT：连接已关闭，但主动关闭方要等 2MSL（Linux 约 60 秒）才彻底释放。
+Local = 127.0.0.1:8080：本地端口是 8080，也就是服务端端口。
+Peer = 127.0.0.1:51872：对端是同一台机器上的临时端口 51872，说明这是本机客户端连本机 8080 的一条连接。
+
+TIME-WAIT 只会出现在主动关闭连接的一方。这里 Local 是服务端端口 8080，说明：
+是服务端（8080）主动发起了关闭，而不是客户端先关。
+
+
+# tcpdump 抓包
+进行一次服务器、客户端交互
+然后 sudo tcpdump -i lo port 8080 -A
+输出一大堆。关键：
+<!-->
+listening on lo, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+
+23:12:25.679017 IP localhost.51290 > localhost.http-alt: Flags [S], seq 29361997, win 65495, options [mss 65495,sackOK,TS val 3963943266 ecr 0,nop,wscale 9], length 0
+E..<w.@.@............Z.....M.........0.........
+.D.b.......	
+
+..................省略
+
+23:12:25.679139 IP localhost.51290 > localhost.http-alt: Flags [P.], seq 1:10, ack 1, win 128, options [nop,nop,TS val 3963943266 ecr 1816818059], length 9: HTTP
+E..=w.@.@............Z.....N..U......1.....
+.D.blJq.Hello TCP
+
+..................省略
+<-->
+一次本机回环上的 “请求-回显-关闭” 完整 TCP 交互：
+客户端 51290 连服务端 8080，发 Hello TCP，服务端回 echo: Hello TCP，
+随后客户端主动 FIN，服务端 ACK+FIN 合并，客户端最后 ACK
+
+
+# telnet 手动发 HTTP 请求
+telnet 127.0.0.1 8080
+GET /index.html HTTP/1.1
+Host: 127.0.0.1
+<!-->
+[http] listening on 0.0.0.0:8080, root=.
+[http] request line: GET /index.html HTTP/1.1
+[http] 200 /index.html (293 bytes)
+<-->
+
+
+# strace 看 socket 系统调用
+strace -e trace=network ./tcp_server_basic
+<!-->
+socket(AF_INET, SOCK_STREAM, IPPROTO_IP) = 3
+setsockopt(3, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
+bind(3, {sa_family=AF_INET, sin_port=htons(8080), sin_addr=inet_addr("0.0.0.0")}, 16) = 0
+listen(3, 128)                          = 0
+[server] listening on 0.0.0.0:8080 ...
+accept(3, NULL, NULL)                   = 4
+[server] client connected, connfd=4
+recvfrom(4, "Hello TCP", 1023, 0, NULL, NULL) = 9
+[server] recv 9 bytes: Hello TCP
+sendto(4, "echo: Hello TCP", 15, 0, NULL, 0) = 15
+[server] sent 15 bytes
++++ exited with 0 +++
+<-->
+资料分析：IPPROTO_IP 数值就是 0，表示“根据 socket 类型自动选协议”，对 SOCK_STREAM 就是 TCP。
+返回 fd = 3
+返回 connfd = 4
+展示了 TCP 服务器 运行过程
+
+
+# MySQL 连接与 TCP
+ss -tan | grep 3306
+<!-->
+LISTEN    0      151          127.0.0.1:3306         0.0.0.0:*    
+LISTEN    0      70           127.0.0.1:33060        0.0.0.0:*    
+<-->
+两个 backlog 不同（151 vs 70），说明它们是两个独立的监听 socket，
+资料：3306 与 33060 的区别
+引入版本	3306 一直都有      ; 	33060 MySQL 8.0+
