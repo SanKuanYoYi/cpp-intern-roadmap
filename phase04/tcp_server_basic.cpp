@@ -31,6 +31,7 @@ int main() {
     perror("socket");
     return -1;
   }
+  printf("[http] listening on 0.0.0.0:8080");
 
   int connfd = -1;
   do {
@@ -64,12 +65,13 @@ int main() {
   printf("[server] recv %zd bytes: %s\n", n, buf);
 
   std::string replay = std::string("echo: ") + buf;
-  ssize_t sent = send(connfd, replay.data(), replay.size(), 0);
-  if (sent < 0) {
-    perror("send"); // 严格说 send 可能部分发送，需要循环；
-  } else {          // demo 小字节以内一般一次发完，这里从简
-    printf("[server] sent %zd bytes\n", sent);
+  if (send_all(connfd, replay.data(), replay.size()) == false) {
+    perror("send");
+    close(connfd);
+    close(listenfd);
+    return -1;
   }
+  printf("[server] sent %zu bytes\n", replay.size());
 
   close(connfd);   // 挂断这条连接（发 FIN，四次挥手开始）
   close(listenfd); // 停止监听

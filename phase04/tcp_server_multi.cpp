@@ -33,23 +33,11 @@ void handle_client(int connfd) {
     printf("[server] connfd=%d recv %zd bytes: %s\n", connfd, n, buf);
 
     // 回复 "echo: " + 收到的内容，循环发送防止部分发送
-    std::string reply = std::string("echo: ") + buf;
-    ssize_t total = 0;
-    while (total < reply.size()) {
-      ssize_t sent = send(connfd, reply.data() + total, reply.size() - total,
-                          MSG_NOSIGNAL);
-      if (sent < 0) {
-        if (errno == EINTR)
-          continue;
-        perror("send");
-        close(connfd);
-        return;
-      }
-      if (sent == 0)
-        break; // 防御性
-      total += sent;
+    std::string replay = std::string("echo: ") + buf;
+    if (send_all(connfd, replay.data(), replay.size()) == false) {
+      perror("send");
     }
-    printf("[server] connfd=%d sent %zu bytes\n", connfd, total);
+    printf("[server] connfd=%d sent %zu bytes\n", connfd, replay.size());
   }
   close(connfd); // 子线程负责关闭自己的连接
 }

@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <asm-generic/socket.h>
+#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstring>
@@ -16,6 +17,29 @@
 
 // 静态文件根目录（相对进程工作目录，必须在 index.html 所在目录启动服务器）
 static const std::string ROOT = ".";
+
+// ---------- 连接计数器 ----------
+std::atomic<int> active_connections{0};
+constexpr int MAX_CONNECTIONS = 100;
+
+// ---------- RAII 计数器守卫 ----------
+struct ConnGuard {
+  std::atomic<int> &counter;
+  explicit ConnGuard(std::atomic<int> &c) : counter(c) {}
+  ~ConnGuard() { counter.fetch_sub(1); }
+  ConnGuard(const ConnGuard &) = delete;
+  ConnGuard &operator=(const ConnGuard &) = delete;
+};
+//为什么 ConnGuard 不能拷贝：一次连接，计数器减了两次
+
+
+// ---------- 503 响应（完整头部） ----------
+static const char k503[] = "HTTP/1.1 503 Service Unavailable\r\n"
+                           "Content-Type: text/plain\r\n"
+                           "Content-Length: 23\r\n"
+                           "Connection: close\r\n"
+                           "\r\n"
+                           "server busy, try later\n";
 
 // ------------------------------------------------------------------
 // 读整个文件到 std::string，失败返回 false
@@ -74,6 +98,8 @@ static std::string make_response(int code, const std::string &status,
 // 处理一个客户端连接
 // ------------------------------------------------------------------
 static void handle_client(int connfd) {
+  ConnGuard guard(active_connections);
+
   // ---------- 1. 读到 \r\n\r\n 为止（请求头结束标志） ----------
   // HTTP 请求可能在 TCP 上被拆成多个段，必须循环 recv
   std::string req; // ① 累积容器（跨多次 recv）
@@ -160,7 +186,8 @@ int main() {
   int listenfd = create_listen_socket(8080);
   if (listenfd < 0)
     return 1;
-  printf("[http] listening on 0.0.0.0:8080, root=%s\n", ROOT.c_str());
+  printf("[http] listening on 0.0.0.0:8080, root=%s,max_conn=%d\n",
+         ROOT.c_str(), MAX_CONNECTIONS);
 
   // 单线程串行处理（demo 够用；
   while (true) {
@@ -173,7 +200,25 @@ int main() {
       perror("accept");
       break;
     }
-    std::thread(handle_client, connfd).detach();
+
+    // ---------- 抢名额 ----------
+    if (active_connections.fetch_add(1) >= MAX_CONNECTIONS) {
+      active_connections.fetch_sub(1); // 回退
+      printf("[http] reject: too many connections (%d)\n", MAX_CONNECTIONS);
+      send_all(connfd, k503, sizeof(k503) - 1);
+      close(connfd);
+      continue;
+    }
+
+    // ---------- 起线程 ----------
+    try {
+      std::thread(handle_client, connfd).detach();
+    } catch (const std::system_error &e) {
+      active_connections.fetch_sub(1); // 回退
+      fprintf(stderr, "[http] thread create failed: %s\n", e.what());
+      send_all(connfd, k503, sizeof(k503) - 1);
+      close(connfd);
+    }
   }
 
   close(listenfd);
