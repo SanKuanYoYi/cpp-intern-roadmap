@@ -71,7 +71,7 @@ int main() {
     close(listenfd);
     return -1;
   }
-  printf("[server] sent %zu bytes\n", replay.size());
+  printf("[server] connfd=%d sent %zu bytes\n", connfd, replay.size());
 
   close(connfd);   // 挂断这条连接（发 FIN，四次挥手开始）
   close(listenfd); // 停止监听

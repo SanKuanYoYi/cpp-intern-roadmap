@@ -36,6 +36,7 @@ void handle_client(int connfd) {
     std::string replay = std::string("echo: ") + buf;
     if (send_all(connfd, replay.data(), replay.size()) == false) {
       perror("send");
+      break;
     }
     printf("[server] connfd=%d sent %zu bytes\n", connfd, replay.size());
   }
