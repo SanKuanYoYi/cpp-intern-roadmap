@@ -2,7 +2,6 @@
 自测练习使用。无其他用途
 */
 
-#include <iostream>
 #include <cstring>
 
 class MyString
