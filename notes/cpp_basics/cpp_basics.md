@@ -416,3 +416,11 @@ uint16_t：无符号 16 位整数
 用在哪：端口号（sin_port）。端口号范围就是 0-65535，用 uint16_t 严丝合缝
 
 描述“地址结构体”的（sockaddr 家族）
+
+
+
+std::exchange 是什么
+std::exchange 在 <utility> 中，C++14 引入。签名：
+//template <class T, class U = T>
+//constexpr T exchange(T& obj, U&& new_val);
+把 obj 的值替换为 new_val，并返回 obj 的旧值。
