@@ -117,7 +117,7 @@ void StudentManager::add_student() {
 
   if (conn_.execute(oss.str())) {
     std::cout << "Student added successfully! (id="
-              << mysql_insert_id(conn_.raw()) << ")#n" << std::endl;
+              << mysql_insert_id(conn_.raw()) << ")\n" << std::endl;
   } else {
     std::cout << "Add failed: " << conn_.last_error() << "\n" << std::endl;
   }

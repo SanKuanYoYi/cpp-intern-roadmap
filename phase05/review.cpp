@@ -5,6 +5,7 @@
 /**************************************************************************/
 
 #include <cstring>
+#include <algorithm>
 
 class MyString {
 private:
@@ -12,7 +13,7 @@ private:
   unsigned int len_;
 
 public:
-  MyString(const char *newData);
+  MyString(const char *newData = "");
 
   MyString(const MyString &other);
   MyString &operator=(const MyString &other);
@@ -45,13 +46,13 @@ MyString::MyString(const MyString &other) {
 
 MyString &MyString::operator=(const MyString &other) {
   if (this != &other) {
-    delete[] data_;
-    len_ = other.len_;
-    data_ = new char[len_ + 1];
-    std::strcpy(data_, other.data_);
+    MyString temp(other);
+    std::swap(data_, temp.data_);
+    std::swap(len_, temp.len_);
   }
   return *this;
 }
+/*仍错采用了delete+new+strcpy的写法————可能悬空指针等问题*/
 
 MyString::MyString(MyString &&other) noexcept {
   len_ = other.len_;
@@ -104,10 +105,10 @@ private:
   std::condition_variable cv_;
 
 public:
-  void push(T &&value) {
+  void push(T value) {
     {
       std::lock_guard<std::mutex> lk(mtx_);
-      q_.push(std::forward(value));
+      q_.push(std::move(value));
     }
     cv_.notify_one();
   }
@@ -118,7 +119,7 @@ public:
 
   bool try_pop(T &value) {
     std::lock_guard<std::mutex> lk(mtx_);
-    if (!q_.empty())
+    if (q_.empty())
       return false;
     value = std::move(q_.front());
     q_.pop();
@@ -168,3 +169,66 @@ std::string make_http_response(int code, const std::string &status,
 /*记不清格式顺序*/
 /*漏掉空格*/
 /*拼写错误*/
+
+#include <iostream>
+
+int main() {
+  // MyString: 拷贝、移动、赋值
+  MyString s1("hello");
+  MyString s2 = s1;            // 拷贝
+  MyString s3 = std::move(s1); // 移动
+  s2 = s3;                     // 拷贝赋值
+  s2 = std::move(s3);          // 移动赋值
+  std::cout << "MyString ok\n";
+
+  // ThreadSafeQueue: 单线程 push/pop
+  ThreadSafeQueue<int> q;
+  q.push(1);
+  q.push(2);
+  int v;
+  if (!q.try_pop(v) || v != 1) {
+    std::cout << "FAIL try_pop\n";
+    return 1;
+  }
+  if (!q.try_pop(v) || v != 2) {
+    std::cout << "FAIL try_pop\n";
+    return 1;
+  }
+  if (q.try_pop(v)) {
+    std::cout << "FAIL empty pop\n";
+    return 1;
+  }
+  std::cout << "TSQ ok\n";
+
+  // make_http_response
+  std::string resp = make_http_response(200, "OK", "text/plain", "hi");
+  if (resp.find("Content-Length: \r\n") == std::string::npos) {
+    std::cout << "FAIL http response\n";
+    return 1;
+  }
+  std::cout << "HTTP ok\n";
+
+  return 0;
+}
+
+// valgrind --leak-check=full ./review
+/*
+==29668== Memcheck, a memory error detector
+==29668== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.
+==29668== Using Valgrind-3.26.0 and LibVEX; rerun with -h for copyright info
+==29668== Command: ./review
+==29668==
+MyString ok
+TSQ ok
+HTTP ok
+==29668==
+==29668== HEAP SUMMARY:
+==29668==     in use at exit: 0 bytes in 0 blocks
+==29668==   total heap usage: 9 allocs, 9 frees, 75,945 bytes allocated
+==29668==
+==29668== All heap blocks were freed -- no leaks are possible
+==29668==
+==29668== For lists of detected and suppressed errors, rerun with: -s
+==29668== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+
+*/
