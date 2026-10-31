@@ -266,3 +266,35 @@ mysql_close() 会关闭连接，但不会释放调用方已经通过 mysql_store
 代价：调用方必须自己管结果集    
 想彻底 RAII：再封装一个 MySQLResult
 
+# mysql_basic_v2.cpp
+
+安全性提升：
+原始版本在 mysql_query 失败时容易忘记 mysql_close；
+v2 无论从哪个路径退出，MySQLConnection 的析构函数都会执行
+原始版本错误信息散落在各个 fprintf 中；v2 通过 last_error() 统一获取。
+
+为什么构造函数失败时抛异常，而不是返回错误码？
+原因一：构造函数没有返回值。
+原因二：RAII 的前提是“资源获取失败必须可感知”
+原因三：异常能携带上下文
+
+移动后原对象处于什么状态？它的析构会做什么？
+移动后原对象处于“有效但未指定”的状态
+对这个类的具体实现来说就是：conn_ == nullptr。
+~MySQLConnection() 检查 conn_ != nullptr，此时 conn_ 是 nullptr，所以析构函数什么也不做，安全地跳过 mysql_close。
+
+如果 execute 执行的是 INSERT，怎么拿到最后插入的 ID？
+调用 mysql_insert_id(conn_)，返回类型是 uint64_t
+mysql_insert_id() 返回前一条 INSERT 或 UPDATE 语句为 AUTO_INCREMENT 列生成的值。
+对于多行 INSERT，返回第一个成功插入的自动生成值；如果没成功插入任何行，返回 0
+如果前一条语句本身报错，返回值是未定义的
+
+如果 execute 执行的是 UPDATE，怎么拿到受影响的行数？
+调用 mysql_affected_rows(conn_)，返回类型是 uint64_t
+UPDATE：返回实际被更改的行数。如果 WHERE 匹配了 10 行，但只有 3 行的新值和旧值不同，返回 3，不是 10。
+DELETE：返回删除的行数。
+INSERT：返回插入的行数。
+SELECT：行为类似 mysql_num_rows（但对于 mysql_store_result 场景，通常直接用结果集对象取行数更自然）。
+返回 0：表示 UPDATE 没有实际更改任何行（要么没有匹配，要么新值等于旧值）。
+返回 -1（无符号下表现为极大值）：表示上一条查询本身出错
+
