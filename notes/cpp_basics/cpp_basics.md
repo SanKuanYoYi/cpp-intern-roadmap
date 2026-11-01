@@ -424,3 +424,14 @@ std::exchange 在 <utility> 中，C++14 引入。签名：
 //template <class T, class U = T>
 //constexpr T exchange(T& obj, U&& new_val);
 把 obj 的值替换为 new_val，并返回 obj 的旧值。
+
+
+
+C++中的std::optional
+std::optional 是C++17标准库中引入的一个模板类，用于表示一个可能存在也可能不存在的值。
+这个类模板提供了一种安全的方式来处理那些可能不返回值的函数或者可能未初始化的变量。
+
+
+
+vector 不能存引用。
+vector<&> 直接编译错误——标准要求容器的元素类型必须可赋值（assignable），引用不可重新绑定
