@@ -425,3 +425,88 @@ index_html	静态页内容	启动时读进内存
 ┌─────────────────────────────────────┐
 │  MySQL C API（libmysqlclient）       │
 └─────────────────────────────────────┘
+
+
+# 从 HTTP 原始字节到路由决策：完整串一遍
+
+1. HTTP 请求长什么样（客户端 → 服务器）
+curl -X POST http://127.0.0.1:8080/todos \
+     -H "Content-Type: application/json" \
+     -d '{"title":"learn epoll"}'
+
+curl 在 TCP 连接上实际发出的字节是：
+POST /todos HTTP/1.1\r\n
+Host: 127.0.0.1:8080\r\n
+User-Agent: curl/8.5.0\r\n
+Content-Type: application/json\r\n
+Content-Length: 23\r\n
+\r\n
+{"title":"learn epoll"}
+
+段	内容	含义
+请求行	POST /todos HTTP/1.1	方法、路径、协议版本，空格分隔
+头部	Host: ...、Content-Length: 23 等	键值对，每行一个，\r\n 结尾
+空行	\r\n	头部结束的标志
+body	{"title":"learn epoll"}	23 个字节（Content-Length 声明的长度）
+
+
+2. HTTP 响应长什么样（服务器 → 客户端）
+服务器处理完后，回给 curl 的字节是：
+HTTP/1.1 201 Created\r\n
+Content-Type: application/json\r\n
+Content-Length: 10\r\n
+Connection: close\r\n
+\r\n
+{"id":42}
+
+段	内容	含义
+状态行	HTTP/1.1 201 Created	版本、状态码、原因短语
+头部	Content-Type、Content-Length 等	键值对
+空行	\r\n	头部结束
+body	{"id":42}	10 字节
+
+状态码是给客户端看的"结果分类"：
+状态码	含义	什么时候用
+200	成功	GET /todos 拿到列表
+201	创建成功	POST /todos 新建了 todo
+204	成功但无内容	DELETE 删掉了，不需要返回 body
+400	客户端请求有错	缺 title、id 不是数字
+404	找不到	GET /todos/999，id 不存在
+405	方法不允许	PUT /todos（不支持 PUT）
+500	服务器内部错误	SQL 执行失败
+
+客户端（curl）只看状态码数字决定"成功还是失败"，Created/Not Found 这些文字是给人看的。
+
+3. 服务器收到字节后，一步步做什么
+第 1 步：recv 收到字节（main.cpp）
+recv 拿到的是一段原始字节，可能是完整的请求，也可能只收到一半（TCP 是流，不保证一次收全）。
+这就需要一个解析器来攒字节、判断"请求完整了吗"。
+
+第 2 步：HttpParser::feed 解析出 HttpRequest（http_parser.cpp）
+① 找 \r\n\r\n，切出头部
+② 解析请求行和头部
+③ 按 Content-Length 切出 body
+结果：一个填好的 HttpRequest
+
+4. handle_request 路由（main.cpp）
+拿到 HttpRequest 后，看 method 和 path，决定做什么。
+
+5. to_wire 把 HttpResponse 变回字节（http_response.cpp）
+路由产出的 HttpResponse 是结构化数据
+to_wire 把它序列化成 HTTP 字节
+得到和第二节完全一样的响应字节
+
+6. send 发给客户端（main.cpp）
+
+
+8. 函数
+函数	在哪	干什么	输入	输出
+recv	main.cpp	从 socket 收字节	fd	原始字节
+HttpParser::feed	http_parser.cpp	字节 → HttpRequest	原始字节	bool（完整了没）
+HttpParser::request	http_parser.cpp	取解析结果	—	const HttpRequest&
+handle_request	main.cpp	路由：method+path → 决策	HttpRequest	HttpResponse
+extract_json_string	main.cpp	从 JSON body 抠一个字段	body, key	字段值
+json_escape	http_response.cpp	转义 JSON 字符串	原始串	可放进 JSON 的串
+TodoRepo::list/get/create/remove	todo_repo.cpp	调 SQL	参数	vector<Todo>/optional<Todo>/int
+to_wire	http_response.cpp	HttpResponse → 字节	HttpResponse	响应字节
+send_all	http_response.cpp	把字节发完	fd, 字节	bool

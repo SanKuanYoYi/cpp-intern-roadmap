@@ -3,7 +3,7 @@
 #include <string>
 #include <unordered_map>
 
-struct HttpRequest {
+struct HttpResponse {
   int status = 200;
   std::string content_type = "text/plain; charset=utf-8";
   std::string body;

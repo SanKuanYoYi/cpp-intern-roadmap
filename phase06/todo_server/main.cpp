@@ -17,11 +17,6 @@
 #include <unistd.h>
 #include <unordered_map>
 
-struct HttpResponse {
-  int status = 500;
-  std::string content_type;
-  std::string body;
-};
 
 // ---------- JSON 提取：从 body 里取 "title" 的值（简易实现） ----------
 static std::string extract_json_string(const std::string &body,
@@ -196,4 +191,34 @@ static HttpResponse handle_request(const HttpRequest &request, TodoRepo &repo,
   response.content_type = "text/plain; charset=utf-8";
   response.body = "{\"error\":\"Not Found\"}";
   return response;
+}
+
+// ---------- 工具：读文件 ----------
+static std::string read_file(const std::string &path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return "<h1>index.html not found</h1>";
+  }
+  std::ostringstream oss;
+  oss << in.rdbuf();
+  return oss.str();
+}
+
+static int set_nonblocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags == -1) {
+    return -1;
+  }
+  return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+int main() {
+  // 1. MySQL 连接 + 建表
+  MySQLConnection conn("localhost", "root", "Mysql@2026", "intern_prep");
+  conn.execute("SET NAMES utf8mb4");
+  TodoRepo repo(conn);
+  if (!repo.init()) {
+    fprintf(stderr, "create table failed: %s\n", conn.last_error().c_str());
+    return 1;
+  }
 }

@@ -2,7 +2,6 @@
 #include "mysql_conn.h"
 #include <mysql/mysql.h>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <vector>
 
