@@ -4,6 +4,7 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
@@ -16,7 +17,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <unordered_map>
-
 
 // ---------- JSON 提取：从 body 里取 "title" 的值（简易实现） ----------
 static std::string extract_json_string(const std::string &body,
@@ -221,4 +221,150 @@ int main() {
     fprintf(stderr, "create table failed: %s\n", conn.last_error().c_str());
     return 1;
   }
+
+  // 2. 读 index.html 到内存（启动时读一次）
+  std::string index_html = read_file("index.html");
+
+  // 3. 监听 socket（非阻塞）
+  int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (listen_fd < 0) {
+    perror("socket");
+    return 1;
+  }
+
+  int opt = 1;
+  if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    perror("setsockopt");
+    close(listen_fd);
+    return 1;
+  }
+
+  sockaddr_in addr;
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = INADDR_ANY;
+  addr.sin_port = htons(8080);
+  if (bind(listen_fd, (sockaddr *)&addr, sizeof(addr)) < 0) {
+    perror("bind");
+    close(listen_fd);
+    return 1;
+  }
+
+  if (listen(listen_fd, SOMAXCONN) < 0) {
+    perror("listen");
+    close(listen_fd);
+    return 1;
+  }
+
+  set_nonblocking(listen_fd);
+
+  // 4. epoll：监听 fd 用 ET
+  int epoll_fd = epoll_create1(0);
+  if (epoll_fd < 0) {
+    perror("epoll_create1");
+    close(listen_fd);
+    return 1;
+  }
+  epoll_event ev{};
+  ev.events = EPOLLIN | EPOLLET;
+  ev.data.fd = listen_fd;
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &ev) < 0) {
+    perror("epoll_ctl");
+    close(listen_fd);
+    close(epoll_fd);
+    return 1;
+  }
+
+  // 每个连接一个解析器
+  std::unordered_map<int, std::unique_ptr<HttpParser>> parsers;
+
+  printf("Server is running on http://localhost:8080\n");
+
+  epoll_event events[64];
+  while (true) {
+    int n = epoll_wait(epoll_fd, events, 64, -1);
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue; // 被信号中断，继续等待
+        perror("epoll_wait");
+        break;
+      }
+
+      for (int i = 0; i < n; i++) {
+        int fd = events[i].data.fd;
+
+        // ---- 新连接 ----
+        if (fd == listen_fd) {
+          while (true) { // ET：accept 到 EAGAIN
+            sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
+            int client_fd =
+                accept(listen_fd, (sockaddr *)&client_addr, &client_len);
+            if (client_fd < 0) {
+              if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (errno == EINTR)
+                  continue; // 被信号中断，继续 accept
+                perror("accept");
+                break;
+              }
+            }
+            set_nonblocking(client_fd);
+            epoll_event client_ev{};
+            client_ev.events = EPOLLIN | EPOLLET;
+            client_ev.data.fd = client_fd;
+            epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &client_ev);
+            parsers[client_fd] = std::make_unique<HttpParser>();
+          }
+          continue;
+        }
+
+        // ---- 已连接 socket 可读 ----
+        auto it = parsers.find(fd);
+        if (it == parsers.end()) {
+          // 不在 parsers 中，可能是已关闭的连接
+          continue;
+        }
+
+        HttpParser &parser = *(it->second);
+
+        bool closed = false;
+        while (true) { // ET：读到 EAGAIN
+          char buf[4096];
+          ssize_t nread = read(fd, buf, sizeof(buf));
+          if (nread > 0) {
+            if (parser.feed(buf, static_cast<size_t>(nread))) {
+              // 解析完成，处理请求
+              HttpResponse response =
+                  handle_request(parser.request(), repo, index_html);
+              std::string response_str = to_write(response);
+              send_all(fd, response_str); // Connection: close，发完就关
+              epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+              close(fd);
+              parsers.erase(it);
+              closed = true;
+              break;
+            }
+          } else if (nread == 0) {
+            // 客户端关闭连接
+            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+            close(fd);
+            parsers.erase(it);
+            closed = true;
+            break;
+          } else {
+            if (errno == EINTR)
+              continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+              break;
+            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+            close(fd);
+            parsers.erase(it);
+            closed = true;
+          }
+        }
+      }
+    }
+  }
+  close(listen_fd);
+  close(epoll_fd);
+  return 0;
 }

@@ -335,6 +335,35 @@ affected_rows == 0 的语义：没找到，不是失败
 
 # main.cpp
 
+1. if (listen(listen_fd, SOMAXCONN) < 0) { perror("listen"); return 1; }
+把 listen_fd 从"普通 socket"变成"监听 socket"，开始接受客户端连接。
+
+int listen(int sockfd, int backlog);
+sockfd	listen_fd	已经 socket() 创建、bind() 绑定过地址的 socket
+backlog	SOMAXCONN	连接队列的最大长度
+返回值：成功 0，失败 -1 并设置 errno。
+
+SOMAXCONN 是什么
+系统定义的常量，表示"这个系统允许的最大 backlog"。可以用 sysctl net.core.somaxconn 查看。
+
+2. std::unordered_map<int, std::unique_ptr<HttpParser>> parsers;
+每个客户端连接需要一个独立的解析器（各自累积字节、各自维护"头部收完没、body 还差多少"），不能共享。
+
+为什么不直接存值：unordered_map 在插入新元素时，可能 rehash 导致所有元素移动
+HttpParser 有 std::string 成员，移动是 O(1) 但需要可移动，且 parsers[fd] 返回的引用可能失效。
+存 unique_ptr，rehash 只移动指针（8 字节）之前拿到的 HttpParser& 引用一直有效。
+
+3. 所有 fd 的名字和角色
+名字	类型	是什么	谁创建	生命周期
+listen_fd	int	监听 socket，绑定 0.0.0.0:8080，只负责 accept 新连接	socket()	整个程序运行期间
+epfd	int	epoll 实例，内核事件表，不对应网络连接	epoll_create1()	整个程序运行期间
+cfd	int	客户端 socket，每个 TCP 连接一个，负责和这个客户端收发数据	accept()	该连接存活期间
+fd	int	事件循环里的临时变量，从 events[i].data.fd 取出，可能是 listen_fd，也可能是某个 cfd	无（只是读出来）	单次循环迭代
+
+4. 两次 sockaddr_in
+第一次：bind 用的——描述"服务器自己的地址"
+第二次：accept 用的——描述"连进来的客户端地址"
+
 
 ## JSON 手写 输出侧和输入侧是两件事
 

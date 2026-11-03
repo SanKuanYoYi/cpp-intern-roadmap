@@ -14,7 +14,7 @@ struct HttpResponse {
 std::string status_text(int status);
 
 // 把 HttpResponse 序列化成 HTTP/1.1 字节流
-std::string to_write(const HttpRequest &response);
+std::string to_write(const HttpResponse &response);
 
 // JSON 字符串转义：", \, 控制字符
 std::string json_escape(const std::string &s);

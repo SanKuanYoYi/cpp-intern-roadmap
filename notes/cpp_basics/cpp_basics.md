@@ -435,3 +435,8 @@ std::optional 是C++17标准库中引入的一个模板类，用于表示一个�
 
 vector 不能存引用。
 vector<&> 直接编译错误——标准要求容器的元素类型必须可赋值（assignable），引用不可重新绑定
+
+
+
+std::make_unique 
+是 C++14 引入的模板函数，用于安全地创建对象并返回一个 std::unique_ptr，避免手动使用 new 和 delete 所带来的内存泄漏风险。
