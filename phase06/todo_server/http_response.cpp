@@ -99,7 +99,6 @@ bool send_all(int fd, const std::string &data) {
     } else {
       return false;
     }
-    total += static_cast<size_t>(n);
   }
   return true;
 }

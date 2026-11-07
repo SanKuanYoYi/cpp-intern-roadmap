@@ -4,8 +4,8 @@
 
 /**************************************************************************/
 
-#include <cstring>
 #include <algorithm>
+#include <cstring>
 
 class MyString {
 private:
@@ -202,7 +202,7 @@ int main() {
 
   // make_http_response
   std::string resp = make_http_response(200, "OK", "text/plain", "hi");
-  if (resp.find("Content-Length: \r\n") == std::string::npos) {
+  if (resp.find("Content-Length: 2\r\n") == std::string::npos) {
     std::cout << "FAIL http response\n";
     return 1;
   }

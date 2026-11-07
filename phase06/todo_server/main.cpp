@@ -143,7 +143,14 @@ static HttpResponse handle_request(const HttpRequest &request, TodoRepo &repo,
   // /todos/:id
   if (path.rfind("/todos/", 0) == 0) {
     std::string id_str = path.substr(7);
-    int id = std::stoi(id_str);
+    int id;
+    try {
+      id = std::stoi(id_str);
+    } catch (...) {
+      response.status = 400;
+      response.body = "{\"error\":\"Invalid id\"}";
+      return response;
+    }
     if (method == "GET") {
       // GET /todos/:id
       auto todo_opt = repo.get(id);
@@ -374,7 +381,6 @@ int main() {
   return 0;
 }
 
-
 /*
 运行结果：
 
@@ -382,19 +388,20 @@ int main() {
 curl -v http://127.0.0.1:8080/
 <-->
 *   Trying 127.0.0.1:8080...
-* Established connection to 127.0.0.1 (127.0.0.1 port 8080) from 127.0.0.1 port 43994 
+* Established connection to 127.0.0.1 (127.0.0.1 port 8080) from 127.0.0.1 port
+43994
 * using HTTP/1.x
 > GET / HTTP/1.1
 > Host: 127.0.0.1:8080
 > User-Agent: curl/8.18.0
 > Accept: * / *
-> 
+>
 * Request completely sent off
 < HTTP/1.1 200 OK
 < Content-Type: text/html; charset=utf-8
 < Content-Length: 29
 < Connection: close
-< 
+<
 * shutting down connection #0
 
 
