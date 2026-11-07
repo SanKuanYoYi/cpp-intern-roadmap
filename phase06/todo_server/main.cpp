@@ -373,3 +373,59 @@ int main() {
   close(epoll_fd);
   return 0;
 }
+
+
+/*
+运行结果：
+
+<!-->
+curl -v http://127.0.0.1:8080/
+<-->
+*   Trying 127.0.0.1:8080...
+* Established connection to 127.0.0.1 (127.0.0.1 port 8080) from 127.0.0.1 port 43994 
+* using HTTP/1.x
+> GET / HTTP/1.1
+> Host: 127.0.0.1:8080
+> User-Agent: curl/8.18.0
+> Accept: * / *
+> 
+* Request completely sent off
+< HTTP/1.1 200 OK
+< Content-Type: text/html; charset=utf-8
+< Content-Length: 29
+< Connection: close
+< 
+* shutting down connection #0
+
+
+
+<!-->
+curl -X POST http://127.0.0.1:8080/todos \
+     -H "Content-Type: application/json" \
+     -d '{"title":"learn epoll"}'
+<-->
+{"id":1,"title":"learn epoll","done":0}
+
+
+
+<!-->
+curl http://127.0.0.1:8080/todos
+<-->
+[{"id":1,"title":"learn epoll","done":0}]
+
+
+
+<!-->
+curl http://127.0.0.1:8080/todos/1
+<-->
+{"id":1,"title":"learn epoll","done":0}
+
+
+
+<!-->
+curl -X POST http://127.0.0.1:8080/todos \
+     -H "Content-Type: application/json" \
+     -d $'{"title":"\'; DROP TABLE todos;--"}'
+<-->
+{"id":2,"title":"'; DROP TABLE todos;--","done":0}
+*/
