@@ -29,7 +29,7 @@ std::string status_text(int code) {
   }
 }
 
-std::string to_write(const HttpRequest &response) {
+std::string to_write(const HttpResponse &response) {
   std::string out;
   out += "HTTP/1.1 " + std::to_string(response.status) + " " +
          status_text(response.status) + "\r\n";

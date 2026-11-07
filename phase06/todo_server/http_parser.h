@@ -22,5 +22,5 @@ public:
   // 返回 true 表示一个完整请求已解析完毕
   bool feed(const char *data, size_t len);
   const HttpRequest &request() const { return request_; }
-  void reser();
+  void reset();
 };

@@ -364,6 +364,9 @@ fd	int	事件循环里的临时变量，从 events[i].data.fd 取出，可能是
 第一次：bind 用的——描述"服务器自己的地址"
 第二次：accept 用的——描述"连进来的客户端地址"
 
+5. std::make_unique 
+是 C++14 引入的模板函数，用于安全地创建对象并返回一个 std::unique_ptr，避免手动使用 new 和 delete 所带来的内存泄漏风险。
+
 
 ## JSON 手写 输出侧和输入侧是两件事
 
