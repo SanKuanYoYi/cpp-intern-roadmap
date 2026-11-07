@@ -76,6 +76,42 @@ static std::string extract_json_string(const std::string &body,
   return out;
 }
 
+// ---------- JSON 提取：从 body 里取一个整数字段的值 ----------
+// 找不到、格式非法、非整数时返回 -1（done 合法值只有 0/1，-1 不会冲突）
+static int extract_json_int(const std::string &body, const std::string &key) {
+  std::string needle = "\"" + key + "\""; // ← 构造 "done"
+  auto pos = body.find(needle);
+  if (pos == std::string::npos)
+    return -1; // 没找到
+
+  auto colon_pos = body.find(":", pos + needle.size()); // ← "done" 后的冒号
+  if (colon_pos == std::string::npos)
+    return -1; // 没找到
+
+  auto comma_pos = body.find(",", colon_pos + 1); // ← 冒号后的逗号
+  auto end_pos = comma_pos == std::string::npos
+                     ? body.find("}", colon_pos + 1)
+                     : comma_pos; // ← 冒号后的逗号或右花括号
+  if (end_pos == std::string::npos)
+    return -1; // 没找到
+
+  size_t start = colon_pos + 1;
+  while (start < body.size() && (body[start] == ' ' || body[start] == '\t' ||
+                                 body[start] == '\n' || body[start] == '\r')) {
+    start++; // 跳过空白字符
+  }
+
+  if (start >= end_pos) {
+    return -1; // 没有数字
+  }
+
+  try {
+    return std::stoi(body.substr(start, end_pos - start));
+  } catch (...) {
+    return -1; // 非整数
+  }
+}
+
 // ---------- 路由 ----------
 static HttpResponse handle_request(const HttpRequest &request, TodoRepo &repo,
                                    const std::string &index_html) {
@@ -186,6 +222,45 @@ static HttpResponse handle_request(const HttpRequest &request, TodoRepo &repo,
       response.status = 204;
       response.content_type = "text/plain; charset=utf-8";
       response.body = "";
+      return response;
+    }
+    if (method == "PUT") {
+      // PUT /todos/:id  body: {"done":0|1}
+      int done = extract_json_int(request.body, "done");
+      if (done != 0 && done != 1) {
+        response.status = 400;
+        response.content_type = "text/plain; charset=utf-8";
+        response.body = "{\"error\":\"Invalid done value\"}";
+        return response;
+      }
+      // 先确认存在（update_done 只看 SQL 是否成功，无法区分"不存在"和"值没变"）
+      auto todo_opt = repo.get(id);
+      if (!todo_opt.has_value()) {
+        response.status = 404;
+        response.content_type = "text/plain; charset=utf-8";
+        response.body = "{\"error\":\"Todo not found\"}";
+        return response;
+      }
+      if (!repo.update_done(id, done)) {
+        response.status = 500;
+        response.content_type = "text/plain; charset=utf-8";
+        response.body = "{\"error\":\"Failed to update todo\"}";
+        return response;
+      }
+      // 返回更新后的 todo
+      auto updated_todo_opt = repo.get(id);
+      if (!updated_todo_opt.has_value()) {
+        response.status = 500;
+        response.content_type = "text/plain; charset=utf-8";
+        response.body = "{\"error\":\"Failed to retrieve updated todo\"}";
+        return response;
+      }
+      response.status = 200;
+      response.content_type = "application/json; charset=utf-8";
+      const auto &t = updated_todo_opt.value();
+      response.body = "{\"id\":" + std::to_string(t.id) + ",\"title\":\"" +
+                      json_escape(t.title) +
+                      "\",\"done\":" + std::to_string(t.done) + "}";
       return response;
     }
     response.status = 405;
@@ -388,8 +463,8 @@ int main() {
 curl -v http://127.0.0.1:8080/
 <-->
 *   Trying 127.0.0.1:8080...
-* Established connection to 127.0.0.1 (127.0.0.1 port 8080) from 127.0.0.1 port
-43994
+* Established connection to 127.0.0.1 (127.0.0.1 port 8080) from 127.0.0.1
+port 43994
 * using HTTP/1.x
 > GET / HTTP/1.1
 > Host: 127.0.0.1:8080
@@ -435,4 +510,115 @@ curl -X POST http://127.0.0.1:8080/todos \
      -d $'{"title":"\'; DROP TABLE todos;--"}'
 <-->
 {"id":2,"title":"'; DROP TABLE todos;--","done":0}
+
+
+
+<!-->
+curl -s -X POST http://127.0.0.1:8080/todos \
+     -H "Content-Type: application/json" \
+     -d '{"title":"test"}'
+<-->
+{"id":4,"title":"test","done":0}
+
+
+
+<!-->
+curl -v -X PUT http://127.0.0.1:8080/todos/4 \
+     -H "Content-Type: application/json" \
+     -d '{"done":1}'
+<-->
+*   Trying 127.0.0.1:8080...
+* Established connection to 127.0.0.1 (127.0.0.1 port 8080) from 127.0.0.1 port 50830 
+* using HTTP/1.x
+> PUT /todos/4 HTTP/1.1
+> Host: 127.0.0.1:8080
+> User-Agent: curl/8.18.0
+> Accept: * / *
+> Content-Type: application/json
+> Content-Length: 10
+> 
+* upload completely sent off: 10 bytes
+< HTTP/1.1 200 OK
+< Content-Type: application/json; charset=utf-8
+< Content-Length: 32
+< Connection: close
+< 
+* shutting down connection #0
+{"id":4,"title":"test","done":1}
+
+
+
+<!-->
+curl -v -X PUT http://127.0.0.1:8080/todos/999 \
+     -H "Content-Type: application/json" \
+     -d '{"done":1}'
+<-->
+*   Trying 127.0.0.1:8080...
+* Established connection to 127.0.0.1 (127.0.0.1 port 8080) from 127.0.0.1 port 44704 
+* using HTTP/1.x
+> PUT /todos/999 HTTP/1.1
+> Host: 127.0.0.1:8080
+> User-Agent: curl/8.18.0
+> Accept: * / *
+> Content-Type: application/json
+> Content-Length: 10
+> 
+* upload completely sent off: 10 bytes
+< HTTP/1.1 404 Not Found
+< Content-Type: text/plain; charset=utf-8
+< Content-Length: 26
+< Connection: close
+< 
+* shutting down connection #0
+{"error":"Todo not found"}
+
+
+
+<!-->
+curl -v -X PUT http://127.0.0.1:8080/todos/5 \
+     -H "Content-Type: application/json" \
+     -d '{}'
+<-->
+*   Trying 127.0.0.1:8080...
+* Established connection to 127.0.0.1 (127.0.0.1 port 8080) from 127.0.0.1 port 49356 
+* using HTTP/1.x
+> PUT /todos/5 HTTP/1.1
+> Host: 127.0.0.1:8080
+> User-Agent: curl/8.18.0
+> Accept: * / *
+> Content-Type: application/json
+> Content-Length: 2
+> 
+* upload completely sent off: 2 bytes
+< HTTP/1.1 400 Bad Request
+< Content-Type: text/plain; charset=utf-8
+< Content-Length: 30
+< Connection: close
+< 
+* shutting down connection #0
+{"error":"Invalid done value"}
+
+
+
+<!-->
+curl -v -X PUT http://127.0.0.1:8080/todos/abc -d '{"done":1}'
+<-->
+*   Trying 127.0.0.1:8080...
+* Established connection to 127.0.0.1 (127.0.0.1 port 8080) from 127.0.0.1 port 55298 
+* using HTTP/1.x
+> PUT /todos/abc HTTP/1.1
+> Host: 127.0.0.1:8080
+> User-Agent: curl/8.18.0
+> Accept: * / *
+> Content-Length: 10
+> Content-Type: application/x-www-form-urlencoded
+> 
+* upload completely sent off: 10 bytes
+< HTTP/1.1 400 Bad Request
+< Content-Type: text/plain; charset=utf-8
+< Content-Length: 22
+< Connection: close
+< 
+* shutting down connection #0
+{"error":"Invalid id"}
 */

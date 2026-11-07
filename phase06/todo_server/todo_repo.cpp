@@ -71,3 +71,10 @@ int TodoRepo::remove(int id) {
   }
   return static_cast<int>(mysql_affected_rows(conn_.raw()));
 }
+
+bool TodoRepo::update_done(int id, int done) {
+  // done 和 id 都是 int，std::to_string 转成十进制数字串
+  std::string sql = "UPDATE todos SET done = " + std::to_string(done) +
+                    " WHERE id = " + std::to_string(id);
+  return conn_.execute(sql);
+}
