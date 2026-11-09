@@ -79,11 +79,10 @@ int main() {
           // 给一个结构体来接收对端的 IP + 端口
           sockaddr_in client_addr{};
           socklen_t len = sizeof(client_addr);
-          int conn =
-              accept4(listen_fd, (sockaddr *)&client_addr, &len, SOCK_CLOEXEC);
+          int conn = accept4(listen_fd, (sockaddr *)&client_addr, &len,
+                             SOCK_CLOEXEC | SOCK_NONBLOCK);
           // accept4 = accept + 顺手设置 fd(flags) 标志，少一次系统调用
           // 没有 accept4 的话，需要多调用 fcntl
-          // 这里只传了 SOCK_CLOEXEC，没传 SOCK_NONBLOCK
           if (conn < 0)
             break;         // 简化
           conns[conn] = 0; // accept 时：登记新连接
@@ -91,6 +90,11 @@ int main() {
           cev.events = EPOLLIN;
           cev.data.fd = conn;
           epoll_ctl(epfd, EPOLL_CTL_ADD, conn, &cev);
+
+          char ip[INET_ADDRSTRLEN];
+          inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
+          printf("Accepted connection from %s:%d\n", ip,
+                 ntohs(client_addr.sin_port));
         }
         continue;
       }
@@ -111,14 +115,20 @@ int main() {
   close(listen_fd);
 }
 
-
 /*
 终端 B
 python3 test/conn.py 100
 
 终端 C（60 秒内执行）
 ps -o pid,nlwp,vsz,rss,cmd -C server
+
 # PID NLWP    VSZ   RSS CMD
-# 28408    1   6896  3940 ./server
+# 7300    1   6896  3960 ./server
+
+# PID NLWP    VSZ   RSS CMD
+# 7300    1   6896  4104 ./server
+
+# PID NLWP    VSZ   RSS CMD
+# 7300    1   6896  4124 ./server
 
 */

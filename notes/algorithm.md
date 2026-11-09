@@ -55,3 +55,12 @@ lamda排序，同身高小k在前。再遍历按k插入
 需要看出是图问题。可以用map建图 a->b,res。
 记录 set-visited 对每个 query 进行 dfs。乘 res 进行传递
 
+394 字符串解码
+注意 num 数字可能大于一位。获取小串之后需要翻转，然后再压回栈 num 次
+
+347 前 k 个高频元素
+map 记录次数。可以大根堆( >k 则pop)、桶排序 buckets[i] 存出现 i 次的所有元素
+
+337 打家劫舍Ⅲ
+unordered_map<TreeNode*, pair<int, int>> dp;  // {不抢, 抢}
+或者 auto res = dfs(root); max(res[0], res[1]); // {不抢, 抢}
