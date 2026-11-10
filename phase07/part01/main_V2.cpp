@@ -79,8 +79,8 @@ int main() {
           // 给一个结构体来接收对端的 IP + 端口
           sockaddr_in client_addr{};
           socklen_t len = sizeof(client_addr);
-          int conn = accept4(listen_fd, (sockaddr *)&client_addr, &len,
-                             SOCK_CLOEXEC | SOCK_NONBLOCK);
+          int conn =
+              accept4(listen_fd, (sockaddr *)&client_addr, &len, SOCK_CLOEXEC);
           // accept4 = accept + 顺手设置 fd(flags) 标志，少一次系统调用
           // 没有 accept4 的话，需要多调用 fcntl
           if (conn < 0)
@@ -132,3 +132,5 @@ ps -o pid,nlwp,vsz,rss,cmd -C server
 # 7300    1   6896  4124 ./server
 
 */
+
+// g++ -std=c++17 -O2 -pthread main.cpp -o server

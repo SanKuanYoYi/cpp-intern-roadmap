@@ -2,6 +2,65 @@
 文档解析，供于查看
 <-->
 
+
+# main_V3.cpp
+
+### test/slow_client.py
+
+slow_client: 疯狂 send 32MB，但一个字节都不 read
+                    │
+                    ▼
+       内核 socket 接收缓冲区（对端）被塞满
+                    │
+                    ▼
+       TCP 滑动窗口收到对端通告 "窗口=0"
+                    │
+                    ▼
+       server 端 write() 发不出去 → 内核发送缓冲区满
+                    │
+                    ▼
+       server 的 write() 在【阻塞 socket】上 → 睡死
+                    │
+                    ▼
+       单线程卡在这一个 write 上 → 整个事件循环停摆
+                    │
+                    ▼
+       其他客户端 nc 连上了但永远不回显
+
+
+阻塞在哪一层？	
+内核 TCP 发送缓冲区。write 把数据拷进内核发送缓冲区，缓冲区满了就阻塞
+
+为什么 nc 能连上却不回显？	
+accept 是在上一个慢客户端 write 卡死之前发生的，新连接进了队列；但主线程卡在 write，轮不到 epoll_wait 去处理它
+
+T3 的 epoll 为什么救不了？	
+epoll 只管"哪些 fd 可读可写"，但 read 之后的 write 还是阻塞的——炸弹在应用层，不在 epoll
+
+
+改动 ①：连接 fd 全部非阻塞
+改动 ②：read 循环到 EAGAIN（不是读一次）
+改动 ③：write 写不完 → 存起来 + 注册 EPOLLOUT
+out:  [已经发出去的][还没发出去的]
+      └── sent ──┘ └─ out.size()-sent ─┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # poller.h
 
 Poller 是 epoll 系统调用的薄封装，只做两件事——
