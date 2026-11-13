@@ -78,10 +78,10 @@ int main() {
       } else if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
           if (!c.want_write) {
-            c.want_write = false;
-            mod_events(epfd, c.fd, false);
+            c.want_write = true;
+            mod_events(epfd, c.fd, true);
           }
-          return; // 缓冲区满了，等 EPOLLOUT
+          return;
         }
         if (errno == EINTR)
           continue;
@@ -184,9 +184,10 @@ int main() {
 
     for (int fd : to_close) {
       epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
-      close_conn(fd);
+      close(fd);
       conns.erase(fd);
     }
-    to_close.clear();
+    to_close.clear(); // clear() 保证每一轮只处理本轮新登记的要关
+                      // fd，不重复关闭上一轮的。
   }
 }

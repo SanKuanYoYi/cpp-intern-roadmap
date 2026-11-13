@@ -45,44 +45,69 @@ out:  [已经发出去的][还没发出去的]
       └── sent ──┘ └─ out.size()-sent ─┘
 
 
+### static void mod_events(int epfd, int fd, bool want_write) 
+为什么封装成函数？
+代码里 mod_events 被调用 3 次（flush 里注册、flush 里注销、未来扩展），每次都要填 5 行 epoll_event。
+封装避免重复，也防止某处忘填 ev.data.fd 这种致命 bug
+
+为什么必须动态改，而不是一直开着 EPOLLOUT？
+这是 epoll 最经典的性能坑：EPOLLOUT 几乎永远是就绪的。
+只要 socket 发送缓冲有空间，内核就认为"可写"。
+如果你常驻注册 EPOLLOUT，epoll_wait 每次都会把这个 fd 塞进返回列表，你的主循环疯狂空转，其他连接的 EPOLLIN 被饿死。
+
+关键陷阱：MOD 只能用于已注册的 fd
 
 
+### std::vector<int> to_close —— 延迟关闭队列
+解决的核心问题：遍历容器时不能删除元素
+auto it = conns.find(fd);       // it 指向 conns 里的某个节点
+Conn& c = it->second;           // c 是引用，绑定到那个节点
+
+// 如果这里直接 conns.erase(fd)：
+//   ① it 失效
+//   ② c 变成悬空引用（dangling reference）
+//   ③ 后续 c.out.empty() / flush(c) 就是 use-after-free
+
+unordered_map::erase 会让被删节点的迭代器和引用失效。
+而事件处理代码里到处都是 c.xxx，一旦提前 erase，后面任何一次 c. 访问都是未定义行为
+
+延迟关闭 = "标记删除 + 统一清理"
+
+为什么必须在"本轮所有事件处理完"才关？
+因为 epoll_wait 一次可能返回多个事件，
+而同一轮里：同一 fd 可能触发多个 event 项 / 不同 fd 之间可能有逻辑关联 / 等等
 
 
+### if (evs & (EPOLLERR | EPOLLHUP)) —— 错误/挂断优先处理
+标志	触发条件	通俗解释
+EPOLLERR	该 fd 发生错误（如 EPIPE、ECONNRESET、socket 异常）	"这连接坏了"
+EPOLLHUP	对端挂断（full close，收到 FIN 且本地也关了写）	"对端彻底走了"
+EPOLLRDHUP（未用）	对端半关闭（只 shutdown 写方向，还能读）	"对端说完了，但还能听我说"
 
+为什么 EPOLLERR/EPOLLHUP 要优先判断，且不管有没有 EPOLLIN？
+关键：EPOLLERR 和 EPOLLHUP 是"无条件触发"的。
+这是 epoll 的特殊语义：EPOLLERR 和 EPOLLHUP 总是被监听，无需显式注册。
+所以 evs 里可能出现 EPOLLIN | EPOLLHUP（数据可读 + 对端挂断），也可能只有 EPOLLHUP。
 
+为什么必须先检查它们、再检查 EPOLLIN？
+兜底：EPOLLERR/EPOLLHUP 出现时，不管是否伴随 EPOLLIN，都立刻关连接
+优先：先于 read 判断，避免在"已坏"的 fd 上做无意义的 read/write
+防泄漏：避免"坏 fd 永远留在 epoll 里空转"的经典 bug
 
+continue 的作用
+处理完这个 fd（标记关闭）后，跳过本轮对它的 read/flush，直接处理 events[i+1]。因为：
+已经 close_conn 了，再 read 是浪费（虽然延迟关没立刻 close，但语义上已死）
+避免在 flush 时对已标记关闭的 fd 写数据
 
+### flush 的语义：
+  ┌─ 能发 → 一直发
+  ├─ 发不动了（EAGAIN）→ 保存 sent 进度，注册 EPOLLOUT，退出
+  └─ 全发完 → 清空 out，注销 EPOLLOUT
 
+关键闭环：flush 成功发完后必须 mod_events(epfd, c.fd, false) 把 EPOLLOUT 摘掉。
+否则回到之前说的坑：EPOLLOUT 常驻 → epoll_wait 永远返回这个 fd → CPU 空转。
 
-
-
-
-
-
-
-# poller.h
-
-Poller 是 epoll 系统调用的薄封装，只做两件事——
-把 Channel 关心的事件同步到内核，以及把内核返回的事件翻译回 Channel
-
-### Poller() : epfd_(::epoll_create1(EPOLL_CLOEXEC)), events_(1024) {}
-CLOEXEC 保证后续 fork + exec 时这个 fd 不会泄漏进子进程。
-服务器里所有 fd（socket、epoll、eventfd）都该带这个标志
-
-### std::vector<epoll_event> events_(1024);复用
-epoll_wait(epfd, events, maxevents, timeout) 的第二个参数是输出缓冲区，内核每次覆写前 n 个元素，不保留旧内容
-
-### 为什么是 unordered_map<int, Channel*> 而不是 Channel* 数组或 data.ptr
-data.ptr = Channel*	直接拿指针	Channel 销毁后成野指针；必须严格"先 DEL 再析构"
-Channel* channels_[MAXFD]	数组下标	fd 可能很大（ulimit -n 可到百万）；要处理 fd 复用；大数组浪费
-data.fd + unordered_map<int, Channel*>	map.find(fd)	一次哈希查找；Channel 销毁后查不到，兜底 continue 即可，最安全
-
-### updateChannel：fd 的增删改
-ADD：fd 当前不在 epoll 集合里，否则 EEXIST。
-MOD：fd 必须在集合里，否则 ENOENT。
-DEL：fd 在不在都能调，ENOENT 可忽略（内核版本差异，稳妥起见先查 map）。
-
-必须先 epoll_ctl 成功，再改 channels_。
-
+### conns.find(fd) + end() 检查
+events[i].data.fd 是内核在 epoll_wait 返回那一刻填进来的快照。
+从"内核填进 events[]"到你"在用户态处理它"，中间隔了一段时间——这段时间里，这个 fd 可能已经在 conns 里被删掉了。
 
