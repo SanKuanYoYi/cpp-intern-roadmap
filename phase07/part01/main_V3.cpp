@@ -100,6 +100,9 @@ int main() {
   while (true) {
     int n = epoll_wait(epfd, events, kMaxEvents, -1); // 就绪个数
     // 每个 fd 会 wait 返回多次
+
+    fprintf(stderr, "wait=%d\n", n);
+
     if (n < 0) {
       if (errno == EINTR)
         continue;
@@ -151,8 +154,11 @@ int main() {
         continue;
       Conn &c = it->second;
 
-      if (evs & (EPOLLIN | EPOLLHUP)) {
-        close(fd);
+      if (evs & (EPOLLERR | EPOLLHUP)) {
+        // 这两个标志不需要你注册也会触发（epoll
+        // 特殊语义），代表"连接坏了/对端彻底走了"。
+        // 优先判断它们、立刻标记关闭、continue 跳过后续 read/flush
+        close_conn(fd);
         continue;
       }
 
@@ -191,3 +197,15 @@ int main() {
                       // fd，不重复关闭上一轮的。
   }
 }
+
+/*
+终端 B
+python3 test/conn.py 1000
+
+
+终端 C
+ps -o nlwp,vsz,rss,cmd -C server
+# NLWP    VSZ   RSS CMD
+# 1   7032  4308 ./server
+
+*/

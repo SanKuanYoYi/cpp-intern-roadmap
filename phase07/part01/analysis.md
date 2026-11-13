@@ -110,4 +110,49 @@ continue 的作用
 ### conns.find(fd) + end() 检查
 events[i].data.fd 是内核在 epoll_wait 返回那一刻填进来的快照。
 从"内核填进 events[]"到你"在用户态处理它"，中间隔了一段时间——这段时间里，这个 fd 可能已经在 conns 里被删掉了。
+### conns.find(fd) 的作用
+epoll_wait 只给你 fd 号（一个整数）。
+但你要的 out、sent、want_write 在 Conn 里。conns 就是 fd → Conn 的映射表
+
+
+### want_write 修改的时机：只有两处
+时机	值	对应 epoll 注册	语义
+初始化（Conn 构造）	false	只 EPOLLIN	正常态
+write 遇 EAGAIN	true	EPOLLIN | EPOLLOUT	等可写
+out 发完	false	只 EPOLLIN	回到正常态
+
+
+### write 之后，数据到底在哪
+应用层 c.out  →  内核 socket 发送缓冲区  →  网络  →  对端内核接收缓冲区  →  对端应用
+   (你管的)         (SO_SNDBUF, 你管不了)              (SO_RCVBUF)
+
+write() 返回 n，含义是“n 个字节已经拷进内核发送缓冲区”，不代表对端收到，也不代表已经发出网卡
+内核缓冲区满了 → write 返回 EAGAIN（非阻塞）或睡眠（阻塞）
+所以“剩下一半”存在两个不同的地方：已经交给内核但没发走的，和你还没来得及交的 c.out
+
+
+# main_V4.cpp
+
+### EPOLLET 改在哪三处？为什么是这三处？
+①：listen_fd 注册时 ev.events = EPOLLIN | EPOLLET;
+②：新 conn 注册时（accept 里）  cev.events = EPOLLIN | EPOLLET;
+③：mod_events 里（最容易忘，忘了就退化成 LT） 
+ev.events = EPOLLET | EPOLLIN | (want_write ? EPOLLOUT : 0);
+
+凡是往 epoll_ctl 的 ev.events 里写东西的地方，EPOLLET 必须跟着走。
+V4 一共三处：ADD listen_fd、ADD conn、MOD conn。
+
+
+### 差的那部分开销去哪了？
+LT 每次通知都要走：
+内核检测缓冲区非空 → 把 fd 塞进就绪链表
+    → epoll_wait 系统调用返回
+    → 用户态 for 循环处理
+    → read 4096
+    → 循环回来，缓冲区还是非空 → 再塞就绪链表 → 再返回....
+每次 epoll_wait 都是一次系统调用 + 上下文切换
+
+ET 一次事件、一次 epoll_wait 返回、用户态循环里 read 256 次，1MB / 4096 ≈ 256 次
+ET 省的不是 read 的次数，是 epoll_wait 被反复唤醒的次数
+
 
