@@ -480,4 +480,13 @@ sockaddr_in addr{}; 值初始化（零初始化）。它的所有成员变量会
 除了 sockaddr_in，写 C++ 遇到任何系统调用的结构体（比如 epoll_event ev;、termios t;），统统都加上 {}
 
 
+33. std::copy 
+<algorithm> copy (InputIterator first, InputIterator last, OutputIterator result);
+first（源起始迭代器）：要复制范围的起点。
+last（源结束迭代器）：要复制范围的终点。
+⚠️ 极其重要：这是一个左闭右开区间 [first, last)。
+它包含 first 指向的元素，但绝对不包含 last 指向的元素。复制会一直进行到 last 的前一个元素。
+result（目标起始迭代器）：你要把数据复制到哪里的起点。
 
+返回值
+返回目标容器中最后一个被复制元素的下一个位置的迭代器。

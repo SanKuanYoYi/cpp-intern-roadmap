@@ -1,8 +1,8 @@
 #include "Buffer.h"
+#include "Buffer.cpp"
 
 #include <cassert>
 #include <cstdio>
-#include <cstring>
 #include <string>
 #include <unistd.h>
 
@@ -30,8 +30,8 @@ int main() {
   assert(b.readableBytes() == 10000);
 
   // readFd：小包走 vec[0]
-  int fds[2]; // 创建管道，读端 fds[0]，写端 fds[1]
-  assert(pipe(fds) == 0);
+  int fds[2];
+  assert(pipe(fds) == 0);                  // 创建管道，读端 fds[0]，写端 fds[1]
   assert(write(fds[1], "abcdef", 6) == 6); // 往管道塞 6 字节
   b.retrieveAll();                         // 清空 b
 

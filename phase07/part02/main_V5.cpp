@@ -1,3 +1,6 @@
+#include "Buffer.cpp"
+#include "Buffer.h"
+
 #include <arpa/inet.h> // inet_ntop
 #include <cerrno>
 #include <cstddef>
@@ -5,7 +8,6 @@
 #include <cstdio>       // printf, perror
 #include <netinet/in.h> // sockaddr_in
 #include <pthread.h>    // pthread
-#include <string>
 #include <sys/epoll.h>  // epoll
 #include <sys/socket.h> // socket
 #include <sys/types.h>
@@ -15,8 +17,7 @@
 
 struct Conn {
   int fd = -1;
-  std::string out; // 待发送
-  size_t sent = 0; // 已经发出去多少
+  Buffer out; // 替代 std::string out + size_t sent
   bool want_write = false;
 };
 
@@ -71,10 +72,10 @@ int main() {
   auto close_conn = [&](int fd) { to_close.push_back(fd); };
 
   auto flush = [&](Conn &c) {
-    while (c.sent < c.out.size()) {
-      ssize_t n = write(c.fd, c.out.data() + c.sent, c.out.size() - c.sent);
+    while (c.out.readableBytes() > 0) {
+      ssize_t n = write(c.fd, c.out.peek(), c.out.readableBytes());
       if (n > 0) {
-        c.sent += static_cast<size_t>(n);
+        c.out.retrieve(static_cast<size_t>(n));
       } else if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
           if (!c.want_write) {
@@ -85,12 +86,14 @@ int main() {
         }
         if (errno == EINTR)
           continue;
-        close(c.fd);
+        close_conn(c.fd);
+        return;
+      } else {
+        close_conn(c.fd); // n == 0，当作异常处理
         return;
       }
     }
-    c.out.clear();
-    c.sent = 0;
+
     if (c.want_write) {
       c.want_write = false;
       mod_events(epfd, c.fd, false);
@@ -100,9 +103,6 @@ int main() {
   while (true) {
     int n = epoll_wait(epfd, events, kMaxEvents, -1); // 就绪个数
     // 每个 fd 会 wait 返回多次
-
-    fprintf(stderr, "wait=%d\n", n);
-
     if (n < 0) {
       if (errno == EINTR)
         continue;
@@ -166,26 +166,26 @@ int main() {
       bool alive = true;
       if (evs & EPOLLIN) {
 
-        char buf[4096];
         while (alive) {
-          ssize_t r = read(fd, buf, sizeof(buf));
+          int err = 0; // ← 每次循环内重新初始化
+          ssize_t r = c.out.readFd(fd, &err);
           if (r > 0) {
-            c.out.append(buf, static_cast<size_t>(r));
+            continue; // 读到了，继续读
           } else if (r == 0) {
-            close(fd);
-            alive = false; // 对端关闭
-          } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            break; // 读干净了
-          } else if (errno == EINTR) {
-            continue;
+            close_conn(fd);
+            alive = false; // FIN
           } else {
+            if (err == EAGAIN || err == EWOULDBLOCK)
+              break;
+            if (err == EINTR)
+              continue;
             close_conn(fd);
             alive = false;
           }
         }
       }
 
-      if (alive && !c.out.empty())
+      if (alive && c.out.readableBytes())
         flush(c); // 有东西就尝试发
     }
 
@@ -198,3 +198,27 @@ int main() {
                       // fd，不重复关闭上一轮的。
   }
 }
+
+/*
+终端 B：
+python3 test/big_send.py
+# echoed: 1048576
+*/
+
+/*
+终端 B：
+python3 test/slow_client.py
+终端 C：
+nc 127.0.0.1 8080
+# (立刻回显)
+*/
+
+/*
+终端 B：
+python3 test/test_conn.py 1000
+
+终端 C：
+ps -o nlwp,rss,cmd -C server
+# NLWP   RSS CMD
+# 1  5136 ./server
+*/

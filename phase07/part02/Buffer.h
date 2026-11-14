@@ -8,7 +8,9 @@ class Buffer {
 private:
   char *begin();
   const char *begin() const;
+  
   void ensureWritableBytes(size_t len);
+  void makeSpace(size_t len);
   void hasWritten(size_t len);
 
   std::vector<char> buf_;
