@@ -219,3 +219,192 @@ Buffer out; // 替代 std::string out + size_t sent
 对比 T4：256 次 read syscall
 
 
+# main_V6.cpp
+V6 到底在解决什么？——用一句话说清
+TCP 是字节流，不保证"send 一次 = recv 一次"。 你发 3 个帧，对端可能：
+一次 read 到 3 个帧（粘包）
+分 3 次读到，每次半帧（半包）
+混着来（第 1 次读到 1.5 帧，第 2 次读到 1.5 帧）
+
+这不是 bug，是设计。 应用层必须自己"划界"。
+V6 用长度前缀划界：[4 字节 len 大端][payload len 字节]。
+
+
+### 必须把 in 和 out 拆开—— V5 的单 Buffer 混不过去了
+struct Conn {
+    int fd = -1;
+    Buffer in;          // 收：内核 → 用户态，可能只有半个帧
+    Buffer out;         // 发：待发送队列
+    bool want_write = false;
+};
+V5的 echo 能用一个 Buffer 混过去，因为"读进来什么就原样写出去"。V6 不行：
+in:  可能永久留着半个帧，等后续数据
+out: 已经确定要发、还没发完的数据
+混在一起 → 你分不清"没发出去"和"没凑齐"
+
+
+### process_frames 五条规则 + while 为什么是灵魂
+规则	判断	返回	含义
+①	in.readableBytes() < 4	true	头都没凑齐，回去等
+②	读头后 len > 10MB	false	恶意/损坏，断开
+③	in.readableBytes() < 4 + len	true	body 没凑齐，等
+④	凑齐了	继续处理	retrieve(4) 吃头 → 拷 len 字节到 out → retrieve(len) 吃 body
+⑤	整个包在 while (true) 里	—	直到某次 return true
+
+规则⑤：while 不是 if
+一次 read 里来了 3 个完整帧
+    │
+    ├─ if 写法：只处理第一个帧，剩下 2 个留在 in 里
+    │       ↓
+    │   ET 模式下"in 里还有数据但没新数据到达" → 不再触发 EPOLLIN
+    │       ↓
+    │   剩下 2 帧永远卡在 in 里 → 客户端永远等不到响应
+    │       ↓
+    │   这就是"粘包处理错误"的典型事故
+    │
+    └─ while 写法：循环处理，帧 1 → 帧 2 → 帧 3 → 没有完整帧 → return true
+            ↓
+        全部处理完，in 里只剩"半个帧"或"空"
+
+### if (in.readableBytes() < 4) return true;
+场景：客户端只发了 f[:2]（2 字节头），in 里只有 2 字节。连头都不够
+为什么 return true 不是 false？
+true = "数据不够，正常，回去等" → 不断连
+false = "协议错误" → 断连
+
+### 读 4 字节大端长度
+假设客户端要发一个 len = 1000 的帧。1000 的十六进制是 0x000003E8。
+大端序（网络字节序）下，这 4 个字节在内存里是：
+内存地址：    +0    +1    +2    +3
+字节值：     0x00  0x00  0x03  0xE8
+             ↑
+             in.peek() 指向这里
+内存里存的是 4 个独立的字节，不是 1 个 32 位数。
+CPU 不知道这 4 个字节应该被当成一个整数——是你（应用层）约定"这 4 个字节拼起来是一个大端长度"。
+
+reinterpret_cast<const unsigned char*> 干了什么？
+它不改变内存里的任何数据，只是告诉编译器："接下来按无符号字节来读这 4 个字节"。
+char 在 Linux/macOS 上默认是有符号的（范围 -128~127）
+这一步不是"可选的优化"，是"必须的正确性保障"：不转，0xE8 会因为符号扩展把高位污染成全 1，长度算成天文数字。
+
+大端序的约定是：先到的字节是高位，后到的是低位。
+字节序列：    [p[0]]  [p[1]]  [p[2]]  [p[3]]
+              0x00    0x00    0x03    0xE8
+分别移到 32 位的对应位置：
+    p[0] 是最高的 8 位   → 左移 24 位
+    p[1] 是次高的 8 位   → 左移 16 位
+    p[2] 是再次的 8 位   → 左移 8  位
+    p[3] 是最低的 8 位   → 不移
+    位置：  [31..24] [23..16] [15..8]  [7..0]
+    来自：  p[0]     p[1]     p[2]     p[3]
+
+(uint32_t)p[0] << 24   = 0x00 << 24 = 0x00000000
+(uint32_t)p[1] << 16   = 0x00 << 16 = 0x00000000
+(uint32_t)p[2] << 8    = 0x03 << 8  = 0x00000300
+(uint32_t)p[3]         = 0xE8       = 0x000000E8
+4 个值按位或（|）拼起来：
+  0x00000000
+| 0x00000000
+| 0x00000300
+| 0x000000E8
+-------------
+  0x000003E8   = 1000  ✅
+
+换个更直观的例子：len = 0x12345678
+字节序列：  p[0]  p[1]  p[2]  p[3]
+            0x12  0x34  0x56  0x78
+计算：
+    (uint32_t)0x12 << 24  = 0x12000000
+    (uint32_t)0x34 << 16  = 0x00340000
+    (uint32_t)0x56 << 8   = 0x00005600
+    (uint32_t)0x78        = 0x00000078
+按位或：
+    0x12000000
+  | 0x00340000
+  | 0x00005600
+  | 0x00000078
+  ------------
+    0x12345678   ✅
+
+网络字节序统一规定是大端
+
+### if (len > kMaxFrame) return false;
+场景：客户端发 struct.pack(">I", 0xFFFFFFFF)（只发 4 字节头，len=4GB）。
+先判超长再判 body 齐不齐，顺序反了会 OOM
+
+
+### 核心：retrieve(4) → 写头 → append body → retrieve(len)
+处理前：
+in:  [L0 L1 L2 L3 | B0 B1 B2 ... B(len-1) | 后续帧...]
+     ↑peek()                      
+     readerIndex_
+第 1 步：in.retrieve(4)
+in:  [L0 L1 L2 L3 | B0 B1 B2 ... B(len-1) | 后续帧...]
+                  ↑peek()（readerIndex_ 前进 4，指向 B0）
+                  ↑readerIndex_
+第 2 步：out.append(hdr, 4)
+out: [L0 L1 L2 L3]   ← 头写进 out
+第 3 步：out.append(in.peek(), len)
+out: [L0 L1 L2 L3 | B0 B1 B2 ... B(len-1)]
+第 4 步：in.retrieve(len)
+in:  [L0 L1 L2 L3 | B0 B1 B2 ... B(len-1) | 后续帧...]
+                                          ↑peek()（readerIndex_ 前进 len）
+                                          ↑readerIndex_
+      ↑ 数据还在 in 里，只是"看不见"了（等 makeSpace compact 才回收）
+
+retrieve(4) 必须在 peek() 取 body 之前
+peek() 永远返回 begin() + readerIndex_。retrieve(4) 让 readerIndex_ 前进 4，peek() 自然指向 body 起点。
+
+### while (true) 是灵魂
+一次 readFd 可能读进 3 个完整帧：
+in: [帧1][帧2][帧3]
+while 循环：
+    迭代 1：处理帧 1 → out 多了 4+len1
+    迭代 2：处理帧 2 → out 多了 4+len2
+    迭代 3：处理帧 3 → out 多了 4+len3
+    迭代 4：in.readableBytes() < 4 → return true
+如果写成 if：
+    只处理帧 1，帧 2、帧 3 留在 in 里
+    → ET 模式下没新数据就不通知 → 帧 2、帧 3 永远卡死
+    
+#### 一张图看完整数据流
+客户端发送：[帧1][帧2][帧3]  （一次 sendall，TCP 可能一次全到）
+                │
+                ▼
+server readFd → c.in
+in: [帧1][帧2][帧3]
+                │
+                ▼
+process_frames(c.in, c.out)  ← while 循环
+    ├─ 迭代1：len=len1，够 → retrieve(4) → out+=hdr1 → out+=body1 → retrieve(len1)
+    ├─ 迭代2：len=len2，够 → retrieve(4) → out+=hdr2 → out+=body2 → retrieve(len2)
+    ├─ 迭代3：len=len3，够 → retrieve(4) → out+=hdr3 → out+=body3 → retrieve(len3)
+    └─ 迭代4：in.readableBytes() < 4 → return true
+                │
+                ▼
+out: [帧1][帧2][帧3]  （3 个完整帧，顺序和客户端发的一致）
+                │
+                ▼
+try_flush(c) → write 全部发给客户端
+
+
+
+
+### 三个关键易错点
+①：操作顺序——retrieve(4) 必须在 peek() 取 body 之前
+②：len == 0 的边界
+回一个空帧 ✅
+③："头齐" ≠ "帧齐"
+
+
+### 读循环改成"读 → 切包 → flush"
+① readFd 读进的是 c.in，不是 c.out
+T6 的 echo 读进 out，因为"读进来直接发出去"。T7 读进 in，因为要先切包、再决定回什么。
+② 每次 readFd 成功后都 
+不立刻 flush，数据会全堆在 out 里——虽然最后也会发，但延迟增大。每次读后立刻发，让客户端"感觉"响应快。try_flush 就是 T6 的 flush，改名强调"能发就发，发不完自动注册 EPOLLOUT"。
+③ r > 0 时 continue，不是 break
+
+
+### 补上 memmove 分支 (Buffer.cpp)
+ensureWritableBytes 只有 resize 的后果：前端被读走的空洞永远不复用，缓冲区只涨不缩。
+

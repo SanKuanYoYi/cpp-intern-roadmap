@@ -1,5 +1,6 @@
 #include "Buffer.h"
 #include <cstddef>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/uio.h> //struct iovec
 
@@ -72,10 +73,17 @@ char *Buffer::begin() { return buf_.data(); }
 const char *Buffer::begin() const { return buf_.data(); }
 
 void Buffer::ensureWritableBytes(size_t len) {
-  if (writableBytes() < len) {
-    makeSpace(len); // 空间不够，想办法腾
+  if (writableBytes() >= len)
+    return;
+  if (prependableBytes() + writableBytes() < len + kCheapPrepend) {
+    buf_.resize(writeIndex_ + len);
+    return;
   }
-  // 够的话直接返回，什么都不做
+  // 不扩容，把数据搬到前面复用空间
+  size_t readable = readableBytes();
+  memmove(begin() + kCheapPrepend, begin() + readIndex_, readable);
+  readIndex_ = kCheapPrepend;
+  writeIndex_ = readIndex_ + readable;
 }
 
 void Buffer::makeSpace(size_t len) {
