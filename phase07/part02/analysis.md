@@ -408,3 +408,112 @@ T6 的 echo 读进 out，因为"读进来直接发出去"。T7 读进 in，因�
 ### 补上 memmove 分支 (Buffer.cpp)
 ensureWritableBytes 只有 resize 的后果：前端被读走的空洞永远不复用，缓冲区只涨不缩。
 
+
+# EpollPoller.h 
+1. 构造 / 析构 —— RAII 是核心
+为什么用 RAII 而不是手动 epoll_create1 + close？
+C++ 类的析构函数会在所有退出路径上被调用——return、break、throw、main 结束，一个都跑不掉。
+这就是 RAII 的意义：把"资源释放"绑定到"对象生命周期"，编译器帮你保证。
+
+2. 禁止拷贝 —— 独占资源
+epoll fd 是独占资源，只能有一个所有者。
+这和 std::unique_ptr 的语义一样——要么删除拷贝，要么实现 move 语义（转移所有权）。
+如果将来要放进容器，再加 move noexcept
+
+3. update(int fd, uint32_t events) —— 最精妙的设计
+只有一个 update，没有 add / mod 两个方法。 
+调用方只关心"我想让这个 fd 关注 events 里的事件"，不关心"之前有没有注册过"。
+
+4. remove(int fd) —— 语义上"尽力而为"
+内核在 close(fd) 时会自动把该 fd 从所有 epoll 实例里摘掉。 所以remove 的返回值可以忽略
+但调用方要遵守约定：先 remove，再 close，或者反过来也行——反正 epoll 内部有 close 钩子
+
+5. int wait(std::vector<struct epoll_event>& out, int timeoutMs);
+① 为什么用 std::vector& 而不是 epoll_event* + int maxevents？
+容量即 maxevents：epoll_wait 最多填 out.size() 个事件，调用方用 out.size() 自然表达"我最多处理几个"
+调用方复用同一个 vector：每轮循环不重新分配，不 resize
+② out 是引用，函数会往里写
+wait 不只是"等"，还"填 out"。调用方传入的 vector 会被 epoll_wait 覆盖前 n 个元素
+
+
+### int epfd_ = -1; —— 私有 fd，不暴露 getEpfd
+为什么不让调用方拿到 epfd_？
+封装的价值在于"只能通过这些方法操作"。T8 只暴露 update / remove / wait，调用方无法绕过。
+epfd_ 是私有 + 无 getter = 真正的封装。
+
+
+# EpollPoller.cpp
+
+### if (epfd_ < 0) throw：构造失败必须抛，不能静默
+构造函数没有返回值！ 你在构造函数里 return 等于"构造成功了"，
+但 epfd_ = -1——后续所有 update/remove/wait 都在 -1 上调系统调用，全部 EBADF
+
+### 析构为什么判断 >= 0？
+防御性编程。虽然 close(-1) 返回 EBADF 无害，但显式判断更清晰，也符合"我的 fd 有效才关"的语义。
+close 之后内核自动 DEL。
+这保证了 RAII 的完整性：你只需要管理 epoll fd 本身的生命周期，里面注册的 fd 内核帮你清
+V6 "先 DEL 再 close"——其实是双保险，只 close 也能清，但显式 DEL 更符合"我要主动移除"的语义。
+
+### update：最精妙的函数
+<!-->
+用大白话讲："我不想记你到底注册过没有，让内核告诉我"
+<-->
+核心逻辑：MOD → ENOENT → ADD
+
+为什么先 MOD 后 ADD，而不是先 ADD 后 MOD？
+两者都正确，选 MOD 优先是性能考量：
+场景	频率	MOD 优先	ADD 优先
+稳态修改事件（加/去 EPOLLOUT）	99%	1 次 syscall ✅	2 次 syscall（ADD 失败 EEXIST → MOD）
+首次注册（accept 新连接）	1%	2 次 syscall（MOD 失败 ENOENT → ADD）	1 次 syscall ✅
+
+### remove：为什么返回值故意忽略
+三种返回情况，都不该炸
+情况	返回值	含义	处理
+fd 在 epoll 里	0	成功删除	正常
+fd 已 close	-1 + EBADF	fd 无效	无害：close 已经自动 DEL 了
+fd 有效但不在 epoll	-1 + ENOENT	本来就没注册	无害：本来就不需要删
+
+### wait：EINTR 处理 + vector 复用
+std::vector<epoll_event>::data() 返回 epoll_event*，指向底层数组
+这就是为什么 out 必须是非 const 引用——epoll_wait 要往里写。
+
+timeoutMs：
+-1 = 永久阻塞，直到有事件
+0 = 非阻塞，立刻返回（哪怕没事件）
+.>0 = 最多等 N 毫秒
+
+▲ EINTR 处理：为什么返回 0 而不是重试
+进程在 epoll_wait 阻塞期间 → 收到信号（SIGCHLD、SIGALRM 等）
+    → 内核打断 epoll_wait，返回 -1，errno = EINTR
+    → 这是"被信号打断"，不是错误
+// 方式 A：内部重试  // 方式 B：返回 0，让调用方决定
+调用方的 while 循环会自动再 wait 一次——等于重试，但把决定权交给调用方。
+
+
+# mian_V7.cpp
+任务（一句话）重构，不改功能。 
+把 main.cpp 里散落的 epoll_create1 / epoll_ctl / epoll_wait / close(epfd) 四个系统调用收进 EpollPoller 类。所有旧测试原样通过 = 任务成功。
+
+### main.cpp 改动：四处机械替换 + 一个 lambda 要拆
+1. epfd 
+int epfd = epoll_create1(...)	裸 fd	EpollPoller poller;
+epoll_ctl(epfd, ADD, listen_fd, &ev)	注册 listen_fd	poller.update(listen_fd, EPOLLIN | EPOLLET);
+mod_events lambda（内部 epoll_ctl MOD）	改事件	删掉 lambda，调用处直接 poller.update(fd, ...)
+epoll_ctl(epfd, ADD, conn, &cev)（accept 里）	注册新连接	poller.update(conn, EPOLLIN | EPOLLET);
+epoll_wait(epfd, events, kMaxEvents, -1)	等事件	poller.wait(events, -1);
+epoll_ctl(epfd, DEL, fd, nullptr)（to_close 里）	注销	poller.remove(fd);
+
+2. 关键：epoll_event ev 这个东西可以整个消失
+每处 epoll_ctl 前都要手填 epoll_event ev{}; ev.events=...; ev.data.fd=...
+// 一行
+poller.update(listen_fd, EPOLLIN | EPOLLET);
+
+3. mod_events lambda 怎么拆
+方案 A：保留 lambda，内部调 poller.update
+方案 B：删掉 lambda，调用处直接写
+
+4. epoll_event events[kMaxEvents] 怎么变成 vector
+vector 在 while 循环外构造一次，循环内复用
+wait 设计就是复用同一个 buffer，out.size() 就是 maxevents。
+放在外面构造一次，循环内 epoll_wait 直接往里写，零分配
+
