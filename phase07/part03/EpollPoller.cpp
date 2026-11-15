@@ -58,7 +58,7 @@ void EpollPoller::remove(Channel *ch) {
 
 void EpollPoller::poll(int timeoutMs, std::vector<Channel *> &active) {
   struct epoll_event evs[64];
-  int n = epoll_wait(epfd_, evs, 64, timeoutMs);
+  int n = epoll_wait(epfd_, evs, 64, timeoutMs); // ① 等
 
   if (n < 0) {
     if (errno == EINTR) {
@@ -69,8 +69,10 @@ void EpollPoller::poll(int timeoutMs, std::vector<Channel *> &active) {
   }
 
   for (int i = 0; i < n; i++) {
-    auto *ch = static_cast<Channel *>(evs[i].data.ptr);
-    ch->setRevents(evs[i].events); // ← 内核告诉"这个 fd 实际就绪了什么"
-    active.push_back(ch);
+    auto *ch = static_cast<Channel *>(evs[i].data.ptr); // ② 拿到对象
+    ch->setRevents(
+        evs[i]
+            .events); // ← 内核告诉"这个 fd 实际就绪了什么" // ③ 记下"就绪什么"
+    active.push_back(ch); // ④ 塞进列表
   }
 }

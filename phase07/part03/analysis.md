@@ -36,7 +36,10 @@ data.ptr 存对象地址，内核在事件就绪时把指针原样返回，省�
 有判断 → events_ == 0 意味着"不想关注任何事件" = 等同于从 epoll 摘掉 → 调 remove(ch) → 干净退出
 
 ### poll 代替 wait：结构性大改
-①：struct epoll_event evs[64] 变成函数内局部变量
+1. 干一件事：等事件，把"谁就绪了"塞进 active。
+
+
+2. ①：struct epoll_event evs[64] 变成函数内局部变量
 T8 的 wait 返回 epoll_event 数组，调用方要自己处理 data.fd。
 T9 的 poll 只在内部用 epoll_event，对外只暴露 Channel* 列表
 64 是 muduo 的默认值
@@ -87,6 +90,13 @@ class EpollPoller;
 开销	一次间接跳转	一次间接跳转 + 可能一次堆分配（小 lambda 有 SBO 优化）
 T9 能用吗	❌ [&, raw] { on_read(raw); } 捕获了 this 和 raw，函数指针装不下	✅
 
+std::function<void()> 就是一个"万能函数容器"：
+std::function<void()> f;
+f = on_read;            // ✅ 装普通函数
+f = cb2;                // ✅ 装捕获 lambda
+f = cb3;                // ✅ 装 bind 结果
+f();                    // ✅ 调用，不管装的是什么
+
 
 ### 构造 + 禁拷贝
 构造参数 EpollPoller* poller：Channel 不拥有 Poller，只持有指针，用它调 update/remove。
@@ -102,15 +112,38 @@ events_（我关注什么）	revents_（内核说就绪了什么）
 handleEvent 只读 revents_，不读 events_——因为"该不该处理"由"内核说就绪了什么"决定，不是"你想关注什么"。
 
 ### 四个回调 setter
-为什么 std::move(cb)？
+1. Channel 里存了四个"空盒子"，每个对应一种事件：
+EventCallback readCallback_;    // 读事件来了，调这个
+EventCallback writeCallback_;   // 写事件来了，调这个
+EventCallback closeCallback_;   // 对端关了，调这个
+EventCallback errorCallback_;   // 出错了，调这个
+
+初始都是空盒子（std::function 默认构造为空）。setReadCallback(cb) 就是"把 cb 装进 readCallback_ 盒子"。
+void setReadCallback(EventCallback cb) { readCallback_ = std::move(cb); }
+//                                                 ↑ 装进盒子
+
+
+2. 为什么 std::move(cb)？
 cb 是按值传入（拷贝了一份 std::function），std::move 把它转移到成员，避免再拷贝一次
 
-为什么四个回调分开存，不搞一个 std::map<uint32_t, EventCallback>？
+4. 为什么四个回调分开存，不搞一个 std::map<uint32_t, EventCallback>？
 4 个成员是固定 4 个 std::function（每个 32 字节左右），无动态分配
 map 每条要一次红黑树节点分配 + 一次查找
 事件类型就 4 种（读/写/关/错），固定成员最快最清晰
 
+
 ### enable/disable 系列：改 events_ 后调 update()
+enableReading() / disableWriting() 四个方法干什么？
+                                    存哪里	谁写	谁读
+回调（readCallback_ 等）	Channel 的成员	setReadCallback	handleEvent
+关注的事件（events_）	Channel 的成员	enable/disable	EpollPoller::update
+回调是"门铃响了干什么"；events_ 是"我要不要装这个门铃"。
+enableReading() = "我要装读门铃" // disableWriting() = "我要拆写门铃"
+EPOLLOUT 几乎永远是就绪的（发送缓冲空着 = 可写）平时：只装读门铃（events_ = EPOLLIN）
+write 遇 EAGAIN：装写门铃（events_ |= EPOLLOUT）
+数据发完：拆写门铃（events_ &= ~EPOLLOUT）
+
+
 每个方法两步：
 改 events_（|= 加，&= ~ 去，= 0 清空）
 update() 通知 Poller（内部 poller_->update(this)）
@@ -185,4 +218,147 @@ EPOLLRDHUP	对端半关闭（shutdown WR）	对端"写完了"，但你还能读�
               main 事件循环：
               for (Channel* ch : active) ch->handleEvent();
 
+
+### 一张图把五个概念串起来
+┌──────────────────────────────────────────────────────┐
+│ Channel（一个 fd 的房间）                             │
+│                                                      │
+│  events_  ← 开关面板：当前关注哪些事件（enable/disable）│
+│                                                      │
+│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐         │
+│  │读门铃  │ │写门铃  │ │关门铃  │ │错门铃  │         │
+│  │cb_读   │ │cb_写   │ │cb_关   │ │cb_错   │         │
+│  └────────┘ └────────┘ └────────┘ └────────┘         │
+│      ↑                                                │
+│      └── setXxxCallback 贴铃                          │
+│                                                      │
+│  revents_ ← 内核说"这次就绪了什么"                    │
+│                                                      │
+│  handleEvent() → 按 revents_ 决定按哪个铃            │
+└──────────────────────────────────────────────────────┘
+        ↑                    ↓
+        │                    │
+        │ update()           │ handleEvent()
+        │                    │
+┌───────┴──────┐    ┌────────┴─────────┐
+│ EpollPoller  │    │ main             │
+│ poll()       │───→│ for (ch: active) │
+│ 返回 Channel*│    │   ch->handleEvent│
+└──────────────┘    └──────────────────┘
+
+东西	一句话
+std::function<void()>	能装任意无参函数的盒子
+EventCallback	给上面那个盒子起的外号，少打字
+四个 setXxxCallback	把回调贴到对应的门铃下面
+enable/disableXxx	拨开关：我要/不要装这个门铃；拨完通知内核
+poll	前台叫号：谁就绪了，塞进 active 列表
+handleEvent	铃响了：按 revents_ 决定按哪个铃，调对应回调
+
+
+
+# main_V8.cpp
+
+### 数据结构：Conn 内嵌 Channel，conns 用 unique_ptr
+① want_write 删掉
+want_write 的物理存储就是 events_ 里的 EPOLLOUT 位。T9 用 ch.isWriting() 替代
+
+② Conn 内嵌 Channel ch
+为什么是值成员，不是 Channel*？
+Channel 和 Conn 生命周期一致（Conn 活多久，Channel 活多久）
+值成员零额外分配，Conn 构造时 ch 一起构造
+
+③ conns 从 unordered_map<int, Conn> 变 std::map<int, unique_ptr<Conn>>
+为什么必须用 unique_ptr？
+// ❌ 用值存储
+std::unordered_map<int, Conn> conns;
+conns[fd] = Conn(...);
+// 如果 unordered_map 扩容 → 所有节点重新哈希 → Conn 对象搬家
+// → data.ptr 指向的地址变了 → epoll 里的 ptr 是旧地址 → 野指针！
+// ✅ 用 unique_ptr
+conns[fd] = std::make_unique<Conn>(...);
+// Conn 在堆上，地址永远不变，data.ptr 永远有效
+
+### 监听 fd 也变成 Channel
+listenCh.setReadCallback([&] { on_accept(); });     // listen 的读回调 = accept
+raw->ch.setReadCallback([&, raw] { on_read(raw); }); // conn 的读回调 = 读数据
+
+main 的主循环不再需要 if (fd == listen_fd)——listenCh 和 connCh 都只是 active 里的一个 Channel*，handleEvent 各调各的回调。
+
+listenCh 不需要 closeCallback/errorCallback——listen_fd 是主 socket，出错整个服务该重启，不是"关闭一个连接"。只设 readCallback 就够。
+
+
+### 三个回调函数（on_accept / on_read / on_write）
+T8 里这些逻辑都嵌在主循环的 if 分支里。T9 把它们提成独立函数。
+
+① on_accept()：循环 accept 到 EAGAIN
+② on_read(Conn* c)：读 → 切包 → flush
+alive 布尔变量被 return 替代——"要关连接"就 push_back 然后 return，不再需要 alive = false 标记。
+③ on_write(Conn* c)：一行 try_flush(c);
+
+
+### close_conn：顺序是生死线
+// ① 先从 epoll 摘掉  ② 再关 fd   ③ 最后销毁对象
+❌ 先 close(fd) 再 remove：
+    close(fd) 后，fd 号可能立刻被系统复用给新 accept 的连接
+        → 新连接也注册了同一个 fd 号
+    poller.remove(&ch) → epoll_ctl DEL 用的是旧 ch 的 fd
+        → 但 fd 号已被新连接占用 → 删掉的是新连接的注册！
+        → 新连接从此收不到事件 → 永远卡死
+    → 偶发、难复现、线上才炸
+
+❌ 先 erase 再 remove：
+    conns.erase(it) → Conn 被 unique_ptr 销毁
+        → Channel 析构 → 但 epoll 里还有 data.ptr = 已释放的 Channel
+    poller.remove 试图访问已释放对象 → UAF
+    下轮 epoll_wait 返回野指针 → 段错误
+
+✅ remove → close → erase：
+    remove：从 epoll 摘掉，不再有事件指向这个 Channel
+    close：关 fd，释放系统资源
+    erase：销毁 Conn（Channel 一起销毁），此时 epoll 里已无引用
+
+### to_close 保护对象生命周期
+on_read 里为什么要 to_close.push_back(fd); return; 而不是直接 close_conn(fd)？
+on_read 是怎么被调用的？
+    main: for (ch : active) ch->handleEvent();
+        → handleEvent 调 readCallback_ → on_read(raw)
+        → on_read 正在执行时，raw 是 active 里的 Channel*
+
+如果 on_read 里直接 close_conn(fd)：
+    → conns.erase → Conn 销毁 → raw 悬空
+    → on_read 返回 → handleEvent 返回 → 回到 for (ch : active)
+    → 下一个 ch 可能是同一个已被销毁的 Channel？不会
+    → 但 active 里还有 raw 的指针，如果后面有代码访问...危险
+    → 更关键：handleEvent 里 on_read 返回后，handleEvent 还要继续往下执行
+       （比如检查 EPOLLOUT 分支）→ 访问已销毁的 Channel → UAF
+
+所以：回调里只登记，统一在 for 循环之后关闭：
+    for (ch : active) ch->handleEvent();   ← 期间 Conn 都活着
+    for (fd : to_close) close_conn(fd);    ← 循环结束后才销毁
+    to_close.clear();
+
+
+### 建连接：raw 指针的捕获
+为什么用 raw 裸指针捕获？
+unique_ptr 不能拷贝，lambda 捕获 c 会编译失败：
+raw = c.get() 拿裸指针，所有权仍在 c（之后转移到 conns）。 lambda 捕获 raw，回调时用 raw 访问对象
+
+
+### 坑
+坑 1：回调里绝不 conns.erase
+坑 2：raw 裸指针的有效性依赖 conns
+坑 3：close_conn 的幂等性
+
+
+### 指针和引用
+位置	写法	为什么
+EpollPoller* poller_	指针	Channel 不拥有 Poller，可能为空（理论上），且将来可能改指向（如果支持切换 Poller 实现）
+update(Channel* ch)	指针	需要"这个 fd 的 Channel"这个概念——Channel 是"被管理的对象"，可能是空的（remove(nullptr) 应该被拒绝），但主要原因是 data.ptr 是 void*，转回来必须是指针**
+poll(..., vector<Channel*>& active)	引用	active 必须存在（调用方保证），函数要往里 push，引用让调用方写 poll(active) 而非 poll(&active)
+handleEvent()	无参	因为是成员函数，this 就是对象
+process_frames(Buffer& in, Buffer& out)	引用	必须存在、要修改、大对象——三重理由
+readFd(int fd, int* saveErrno)	指针	saveErrno 是可选输出——如果调用方不关心错误码，可以传 nullptr。这是 C 风格"可选输出参数"的惯例
+Conn* raw（lambda 捕获）	指针	每个连接一份独立副本，按值捕获指针恰好实现这个——如果按引用捕获，会被下一次 accept 覆盖
+std::unique_ptr<Conn>	智能指针	显式所有权——conns 拥有 Conn 的生命周期
+for (Channel* ch : active)	指针（迭代）	active 存的就是指针
 
