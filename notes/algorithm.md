@@ -102,5 +102,15 @@ dfs 或 bfs。需要切 token 。bfs 先建根、同时取左右孩子
 22 括号生成
 用回溯。从 0 或从 n 开始
 
+49 字母的异位词分组
+除了 bf。可以将每个 sort 的串作为 key，map 存 vector<string>
 
+48 旋转图像
+可以先转置再水平翻转每一行。或四个位置循环交换用公式。
+矩阵转置:matrix[i][j] ↔ matrix[j][i]
+矩阵水平镜像:matrix[i][j] ↔ matrix[i][n-1-j]
+矩阵垂直镜像:matrix[i][j] ↔ matrix[m-1-i][j]
+矩阵顺时针旋转90度， new_matrix[j][n-1-i] = matrix[i][j],就相当于垂直镜像+转置
+矩阵顺时针旋转180度，new_matrix[n-1-i][n-1-j] = matrix[i][j],就相当于水平镜像+垂直镜像
+矩阵逆时针旋转90度，new_matrix[n-1-j][i] = matrix[i][j],就相当于水平镜像+转置
 

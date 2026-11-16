@@ -85,7 +85,7 @@ ensureWritableBytes 是 Buffer 的核心私有逻辑
 
 
 
-# buffer_test.cpp
+# buffer.cpp
 测试不只是"能跑"，它用断言定义了 Buffer 应该满足的所有性质。
 
 ### append 到"取走后"的 Buffer
@@ -403,10 +403,6 @@ T6 的 echo 读进 out，因为"读进来直接发出去"。T7 读进 in，因�
 ② 每次 readFd 成功后都 
 不立刻 flush，数据会全堆在 out 里——虽然最后也会发，但延迟增大。每次读后立刻发，让客户端"感觉"响应快。try_flush 就是 T6 的 flush，改名强调"能发就发，发不完自动注册 EPOLLOUT"。
 ③ r > 0 时 continue，不是 break
-
-
-### 补上 memmove 分支 (Buffer.cpp)
-ensureWritableBytes 只有 resize 的后果：前端被读走的空洞永远不复用，缓冲区只涨不缩。
 
 
 # EpollPoller.h 

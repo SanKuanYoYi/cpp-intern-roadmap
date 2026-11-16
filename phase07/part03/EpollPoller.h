@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint> // uint32_t
 #include <sys/epoll.h>
 #include <vector>
 
