@@ -1,7 +1,9 @@
 #include "Buffer.h"
+#include "Channel.h"
 #include "EpollPoller.h"
 
 #include "Buffer.cpp"
+#include "Channel.cpp"
 #include "EpollPoller.cpp"
 
 #include <arpa/inet.h> // inet_ntop
@@ -102,6 +104,10 @@ int main() {
   std::function<void(int)> close_conn;
 
   close_conn = [&](int fd) {
+
+    // ⑥ close_conn 里（close_conn 开头）
+    fprintf(stderr, "[close] fd=%d\n", fd);
+
     auto it = conns.find(fd);
     if (it == conns.end()) // 已经关过了，幂等
       return;
@@ -116,6 +122,7 @@ int main() {
       ssize_t n = write(c->ch.fd(), c->out.peek(), c->out.readableBytes());
       if (n > 0) {
         c->out.retrieve(static_cast<size_t>(n));
+        continue;
       } else if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
           if (!c->ch.isWriting()) {
@@ -154,14 +161,27 @@ int main() {
       raw->ch.setWriteCallback([&, raw] { on_write(raw); });
       raw->ch.setCloseCallback([&, raw] { to_close.push_back(raw->ch.fd()); });
       raw->ch.setErrorCallback([&, raw] { to_close.push_back(raw->ch.fd()); });
+
+      // ② 新 Channel enableReading() 前（on_accept 里）
+      fprintf(stderr, "[enable] fd=%d events=%u\n", conn,
+              raw->ch.events()); // 此时 events_ = 0
+
       raw->ch.enableReading();
       conns[conn] = std::move(c); // ← unique_ptr 进 map，所有权转移
+
+      // ① accept 成功后（on_accept 里）
+      fprintf(stderr, "[accept] fd=%d conns=%zu\n", conn, conns.size());
     }
   };
 
   on_read = [&](Conn *c) {
     while (true) {
       int err = 0;
+
+      // ⑤ on_read 结束时（on_read 末尾，或者每次 readFd 后）
+      fprintf(stderr, "[read] fd=%d out=%zu\n", c->ch.fd(),
+              c->out.readableBytes());
+
       ssize_t r = c->in.readFd(c->ch.fd(), &err);
       if (r > 0) {
         if (!process_frames(c->in, c->out)) {
@@ -198,6 +218,9 @@ int main() {
     active.clear();          // ① 清空（保留容量）
     poller.poll(-1, active); // ② 等事件，填 active
 
+    // ③ poller.poll 返回后（main 主循环）
+    fprintf(stderr, "[poll] n=%zu\n", active.size());
+
     for (Channel *ch : active) { // ③ 分发
       ch->handleEvent();
     }
@@ -208,3 +231,77 @@ int main() {
     to_close.clear();
   }
 }
+
+/*
+python3 test_conn.py 1000
+
+ps -o nlwp,rss,cmd -C server
+# NLWP   RSS CMD
+# 1  6020 ./server
+*/
+
+/*
+遇到Bug 定位：try_flush 的结构错了
+n > 0 时 retrieve 之后没有 continue，代码掉到下面的 to_close.push_back +
+return。
+
+这个 bug 为什么 T8 没犯、T9 犯了
+T8 结构	T9 你写的结构
+n > 0 之后	回到 while 顶部，条件 sent < size 继续	掉到 if/else 之后的 to_close
+n == 0	单独 else 分支关	和「写成功」掉进同一个兜底
+to_close 位置	在 else 里（只 n == 0）	在 if/else 之后（所有分支都撞）
+
+T8 的 else if (n < 0) { ... } else { close; } 是「三路互斥」；
+T9 的 if (n > 0) {...} if (n < 0) {...} to_close; 是「两路非互斥 + 一段公共尾」——少一个 continue 就全乱。
+*/
+
+/*
+[poll] n=1
+[event] fd=3 revents=0x1
+[enable] fd=5 events=0
+[accept] fd=5 conns=1
+[poll] n=1
+[event] fd=5 revents=0x1
+[read] fd=5 out=0
+[read] fd=5 out=0
+[read] fd=5 out=0
+[poll] n=1
+[event] fd=5 revents=0x1
+[read] fd=5 out=0
+[read] fd=5 out=0
+[close] fd=5
+[poll] n=1
+[event] fd=3 revents=0x1
+[enable] fd=5 events=0
+[accept] fd=5 conns=1
+[poll] n=1
+[event] fd=5 revents=0x1
+[read] fd=5 out=0
+[read] fd=5 out=0
+[poll] n=1
+[event] fd=5 revents=0x1
+[read] fd=5 out=0
+[read] fd=5 out=0
+[poll] n=1
+[event] fd=5 revents=0x1
+[read] fd=5 out=0
+[read] fd=5 out=0
+[close] fd=5
+[poll] n=1
+[event] fd=3 revents=0x1
+[enable] fd=5 events=0
+[accept] fd=5 conns=1
+[poll] n=1
+[event] fd=5 revents=0x1
+[read] fd=5 out=0
+[read] fd=5 out=0
+[close] fd=5
+[poll] n=1
+[event] fd=3 revents=0x1
+[enable] fd=5 events=0
+[accept] fd=5 conns=1
+[poll] n=1
+[event] fd=5 revents=0x1
+[read] fd=5 out=0
+[close] fd=5
+*/

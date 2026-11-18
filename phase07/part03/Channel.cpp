@@ -1,10 +1,14 @@
 #include "Channel.h"
 #include "EpollPoller.h"
+#include <cstdio>
 
 Channel::Channel(EpollPoller *poller, int fd) : poller_(poller), fd_(fd) {};
 Channel::~Channel() = default;
 
 void Channel::handleEvent() {
+  // ④ handleEvent 进入时（Channel::handleEvent 开头）
+  fprintf(stderr, "[event] fd=%d revents=0x%x\n", fd_, revents_);
+
   // 顺序有讲究：错误 → 挂断 → 可读 → 可写
   if ((revents_ & EPOLLERR) && errorCallback_) {
     //"内核说这个 fd 出错了（EPOLLERR）？而且我贴了错门铃？→

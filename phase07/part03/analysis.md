@@ -362,3 +362,84 @@ Conn* raw（lambda 捕获）	指针	每个连接一份独立副本，按值捕�
 std::unique_ptr<Conn>	智能指针	显式所有权——conns 拥有 Conn 的生命周期
 for (Channel* ch : active)	指针（迭代）	active 存的就是指针
 
+
+# 一次完整流程（从连接到关闭）
+① 建连接（on_accept 里）
+   Channel ch(&poller, conn_fd)       ← 新建前台，管 fd
+   ch.setReadCallback(on_read)        ← 读电话设号码：on_read
+   ch.setWriteCallback(on_write)      ← 写电话设号码：on_write
+   ch.setCloseCallback(on_close)      ← 关电话设号码：on_close
+   ch.setErrorCallback(on_error)      ← 错电话设号码：on_error
+   ch.enableReading()                 ← 拨开关：读电话开
+       → events_ |= EPOLLIN
+       → poller.update(ch) → epoll_ctl ADD
+   
+② 客户端发数据
+   内核 → epoll_wait 返回 → poller.poll 把 ch 塞进 active
+   main: ch->handleEvent()
+       → revents_ = EPOLLIN
+       → 读电话开关开了吗？开了
+       → readCallback_ 非空吗？非空
+       → 调用 readCallback_() = on_read(raw)
+   
+③ on_read 里读 → 切包 → try_flush 回包
+   
+④ try_flush 遇 EAGAIN（发送缓冲满）
+   if (!ch.isWriting())            ← 写电话当前关着
+       ch.enableWriting()          ← 开写电话
+           → events_ |= EPOLLOUT
+           → poller.update(ch) → epoll_ctl MOD（现在监听读写）
+   
+⑤ 发送缓冲腾空，内核说可写
+   ch->handleEvent()
+       → revents_ = EPOLLOUT
+       → 写电话开关开了吗？开了
+       → writeCallback_ 非空吗？非空
+       → 调用 writeCallback_() = on_write(raw)
+   
+⑥ on_write 里 try_flush 把剩余数据发完
+   if (ch.isWriting())             ← 写电话还开着
+       ch.disableWriting()         ← 关写电话
+           → events_ &= ~EPOLLOUT
+           → poller.update(ch) → epoll_ctl MOD（现在只监听读）
+   
+⑦ 客户端关了
+   内核 → revents_ = EPOLLHUP
+   handleEvent → 关电话开关开了吗？开了 → closeCallback_() → push_close
+
+revents_ 只代表"内核说发生了什么"，真正调哪个回调还要看"这次这个事件你设了回调没"（&& readCallback_）
+
+
+┌───────────────────────────────────────────────────┐
+│ Channel（前台）                                     │
+│                                                   │
+│  ┌─ 开关面板（events_）──────────────────────────┐ │
+│  │  读电话 [✓]   写电话 [✗]                      │ │
+│  │  ← EPOLLIN 位  ← EPOLLOUT 位                 │ │
+│  │  由 enableReading/disableWriting 控制         │ │
+│  └───────────────────────────────────────────────┘ │
+│                                                   │
+│  ┌─ 四部电话（回调）──────────────────────────────┐│
+│  │  ☎读  → readCallback_  = on_read              ││
+│  │  ☎写  → writeCallback_ = on_write             ││
+│  │  ☎关  → closeCallback_ = on_close             ││
+│  │  ☎错  → errorCallback_ = on_error             ││
+│  │  由 setXxxCallback 设号码                     ││
+│  └───────────────────────────────────────────────┘ │
+│                                                   │
+│  ┌─ 内核通知的实际情况（revents_）───────────────┐│
+│  │  "这次 EPOLLIN 就绪了"                         ││
+│  └───────────────────────────────────────────────┘│
+│                                                   │
+│  handleEvent() = 看 revents_ → 对就绪事件           │
+│                  检查开关 + 号码 → 响对应电话        │
+└───────────────────────────────────────────────────┘
+
+
+概念	一句话	生活对照
+setXxxCallback(cb)	给某部电话设转接号码	把你的手机号存到"读电话"上
+enableXxx()	打开某部电话的开关	拨开开关面板上的"读电话"
+disableXxx()	关掉某部电话的开关	拨关"读电话"（比如打烊）
+handleEvent()	前台按 revents_ 响电话	客户来了：看哪个电话该响 → 响它 → 转给你
+
+enable/disable 决定"要不要被通知"（开关），setXxxCallback 决定"被通知后干什么"（号码）。两件事完全独立，都要做才能工作。
