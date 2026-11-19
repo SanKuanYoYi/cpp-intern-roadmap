@@ -443,3 +443,13 @@ disableXxx()	关掉某部电话的开关	拨关"读电话"（比如打烊）
 handleEvent()	前台按 revents_ 响电话	客户来了：看哪个电话该响 → 响它 → 转给你
 
 enable/disable 决定"要不要被通知"（开关），setXxxCallback 决定"被通知后干什么"（号码）。两件事完全独立，都要做才能工作。
+
+
+# 杂
+Buffer 里没有 fd，只有 buf_ / readerIndex_ / writerIndex_。它跟 fd 一点关系都没有
+
+对端关闭连接触发的 EPOLLIN——read 返回 0，代码据此关闭。记住：对端关闭也会表现为“可读”
+
+fd 复用：真实存在，但那是 close 之后内核的行为，跟你 erase 无关
+真正的问题：epoll 里存的是 Channel*（data.ptr），Conn 一 erase，那个地址就失效了。
+下一个事件到来，handleEvent() 会访问一块已释放的内存——段错误或静默脏数据。这跟 fd 号无关，是指针悬空。
