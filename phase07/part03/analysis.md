@@ -453,3 +453,6 @@ Buffer 里没有 fd，只有 buf_ / readerIndex_ / writerIndex_。它跟 fd 一�
 fd 复用：真实存在，但那是 close 之后内核的行为，跟你 erase 无关
 真正的问题：epoll 里存的是 Channel*（data.ptr），Conn 一 erase，那个地址就失效了。
 下一个事件到来，handleEvent() 会访问一块已释放的内存——段错误或静默脏数据。这跟 fd 号无关，是指针悬空。
+
+
+
