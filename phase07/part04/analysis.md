@@ -4,7 +4,7 @@
 
 
 
-T10 要做的只有一件事：把这坨东西整个搬到类里，名字叫 EventLoop。
+T10 要做的只有一件事：把while整个搬到类里，名字叫 EventLoop。
 main() 里一句 while 都没有，只剩 loop.loop();
 "什么时候该干活"归 EventLoop，"干什么活"归回调
 main() 里看不到任何 epoll 相关的东西（epoll_、EPOLLIN、poller）
@@ -32,27 +32,7 @@ EventLoop = 值班经理。他决定“多久去问一次门卫”（poll 的时
 （遍历 active_）、“谁的事散会后办”（pendingClose_）、“一轮什么时候算完”（clear 之后）
 
 
-# 全局图
-                    ┌─────────────── main.cpp（店长）───────────────┐
-                    │  开店 listen、造 Channel、挂回调、loop.loop()   │
-                    └───────────────┬──────────────────────────────┘
-                                    │ ① 搭架子（一次性）
-                    ┌───────────────▼──────────────────────────────┐
-                    │            EventLoop（值班经理）              │
-                    │   一轮一轮地：问 → 派活 → 清场                 │
-                    │   手里攥着：poller_ / active_ / pendingClose_ │
-                    └───────┬──────────────────────────▲───────────┘
-               ② poll(问)    │                          │ ③ handleEvent(派活)
-                    ┌───────▼──────────┐      ┌────────┴──────────┐
-                    │ EpollPoller(门卫) │◄─────┤  Channel（档案卡） │
-                    │  只跟内核打交道    │ ④update/remove        │
-                    └───────┬──────────┘      └────────┬──────────┘
-                            │ 内核事件                 │ ⑤ 回调跳回业务
-                            ▼                          ▼
-                         Linux 内核            Conn{ Buffer in; Buffer out; }
-
-
-
+# 全局
 文件	一句话角色	它知道	它不知道	类比
 Buffer	存字节的容器，三段式（已读 / 可读 / 可写）	字节、下标、怎么扩容	字节是啥协议、属于谁	备菜盘：一个装生料（in），一个装熟菜（out）
 EpollPoller	把 3 个 epoll 系统调用包起来	fd、事件掩码、Channel*	什么是“读”、什么是“业务”	前台门卫：只负责“谁来了”和“记下谁要盯什么”
@@ -100,7 +80,8 @@ Channel 是上行下行的“交汇点”，所以它同时持有 fd_、events_�
 # EventLoop.h
 
 ### using CloseHandler = std::function<void(int fd)>;
-这里只传一个 int fd，不传 Conn*。这是故意的：EventLoop 属于网络层，Conn 属于你的业务层，网络层绝不能 #include 上层的东西。
+这里只传一个 int fd，不传 Conn*。
+这是故意的：EventLoop 属于网络层，Conn 属于你的业务层，网络层绝不能 #include 上层的东西。
 所以底层只喊"我要关 5 号 fd"，至于 5 号 fd 背后是哪个 Conn 对象 —— 交给上层注入的回调自己去找。
 
 ### void closeLater(int fd) { pendingClose_.push_back(fd); }
@@ -153,3 +134,226 @@ if (closeHandler_) 这层判空：
 ### EventLoop loop; // 先声明 → 后析构 Channel listenCh(&loop, listen_fd);   // 后声明 → 先析构  ✅ 安全
 Channel 里存着 EventLoop* loop_。如果 EventLoop 先死，Channel 就成了悬空指针。
 
+
+# 从启动到关闭：完整调用链
+
+### 阶段一：启动（main 从上走到 loop.loop() 之前）
+ ① create_and_listen(8080)
+      socket(AF_INET, SOCK_STREAM, 0)
+      setsockopt(SO_REUSEADDR)
+      bind / listen
+      fcntl(O_NONBLOCK)
+      → listen_fd = 3
+
+ ② EventLoop loop;
+      ├─ EpollPoller::EpollPoller()
+      │     epollfd_ = epoll_create1(EPOLL_CLOEXEC)     → 4
+      └─ active_.reserve(64)                            ← 与 evs[64] 对齐
+
+ ③ map<int, unique_ptr<Conn>> conns;                   ← 空的
+
+ ④ auto close_conn = [&](int fd){...};                  ← 只定义，不执行
+
+ ⑤ loop.setCloseHandler(close_conn)                     ← ★ 必须在这儿
+
+ ⑥ auto try_flush / process_frames / on_write / on_read / on_accept
+                                                         ← 全只定义，不执行
+
+ ⑦ Channel listenCh(&loop, listen_fd)                   ★ 必须晚于 loop
+      只有：loop_ = &loop, fd_ = 3, events_ = 0, revents_ = 0
+      注意：此刻内核什么都还不知道
+
+ ⑧ listenCh.setReadCallback([&]{ on_accept(); })
+
+ ⑨ listenCh.enableReading()
+      ├─ events_ |= EPOLLIN                     → events_ = 0x1
+      └─ update()
+            └─ loop_->updateChannel(this)
+                  └─ poller_.update(this)
+                        ├─ epoll_ctl(epollfd_=4, MOD, fd=3) → 返回 ENOENT
+                        └─ epoll_ctl(epollfd_=4, ADD, fd=3, {EPOLLIN|ET, .ptr=&listenCh})
+                              ★ 此刻内核才第一次知道 fd=3 的存在
+
+ ⑩ loop.loop()  ← 从此 main 再也不参与
+
+
+### 阶段二：一轮 runOnce() 的 5 步（核心图）
+┌─────────────────── EventLoop::runOnce() ────────────────────────┐
+│                                                                 │
+│  ① active_.clear()                       清空上轮名单（size 变 0，容量保留）
+│      ↓                                                          │
+│  ② poller_.poll(-1, active_)                                    │
+│      │                                                          │
+│      │  ┌──────────── EpollPoller::poll ────────────┐           │
+│      └─►│ n = epoll_wait(epollfd_, evs[64], -1)     │           │
+│         │     ↑ 阻塞，直到有 fd 就绪                 │           │
+│         │                                           │           │
+│         │ for (i = 0; i < n; ++i) {                 │           │
+│         │     ch = (Channel*)evs[i].data.ptr;       │  ← 不用查表
+│         │     ch->setRevents(evs[i].events);        │  ← ★ 内核答复写进 Channel
+│         │     active_.push_back(ch);                │           │
+│         │ }                                         │           │
+│         └───────────────────────────────────────────┘           │
+│      ↓                                                          │
+│  ③ for (Channel* ch : active_)          派活：只分发，不干活        │
+│      └─► ch->handleEvent()                                      │
+│              ├─ revents_ & (EPOLLERR|EPOLLHUP)  → errorCb_();  return
+│              ├─ revents_ & (EPOLLIN|EPOLLRDHUP) → readCb_()   ← on_read
+│              └─ revents_ & EPOLLOUT             → writeCb_()  ← on_write
+│      ↓                                                          │
+│  ④ for (int fd : pendingClose_)        散会后才动刀                 │
+│      └─► closeHandler_(fd)  ──► close_conn                      │
+│                                   removeChannel → ::close → erase
+│      ↓                                                          │
+│  ⑤ pendingClose_.clear()                                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+                                     ↓ 回到 ①，无限循环
+
+
+### 阶段三：四条真实路径的完整时序
+1. 路径 A｜新连接进来（accept）
+客户端 connect
+   ↓
+内核：listen_fd=3 可读
+   ↓
+epoll_wait 返回 n=1, evs[0]={fd=3, EPOLLIN, ptr=&listenCh}
+   ↓
+poller.poll  →  listenCh->setRevents(EPOLLIN)  →  active_=[&listenCh]
+   ↓
+runOnce ③  →  listenCh.handleEvent()
+   ↓
+Channel：revents_ & EPOLLIN  →  readCallback_()
+   ↓
+main 的 on_accept()   ← 注意：它不知道什么 fd 就绪了，也不需要知道
+   ├─ accept(listen_fd)  →  新 fd=5
+   ├─ make_unique<Conn>(&loop, 5)
+   │     ├─ Buffer in   构造：readerIndex_=writerIndex_=kCheapPrepend(8)
+   │     ├─ Buffer out  构造：同上
+   │     └─ Channel ch  构造：loop_=&loop, fd_=5, events_=0
+   ├─ raw = c.get()
+   ├─ ch.setReadCallback ([&,raw]{ on_read(raw);  })
+   ├─ ch.setWriteCallback([&,raw]{ on_write(raw); })
+   ├─ ch.setErrorCallback([&,raw]{ loop.closeLater(raw->ch.fd()); })
+   ├─ ch.enableReading()
+   │     └─ Channel::update → loop.updateChannel → poller.update
+   │           └─ epoll_ctl(MOD, fd=5) → ENOENT
+   │           └─ epoll_ctl(ADD, fd=5, {EPOLLIN|ET, .ptr=&ch})
+   ├─ conns.emplace(5, move(c))
+   └─ 再 accept 一次 → EAGAIN → return
+   ↓
+返回 handleEvent  →  返回 runOnce ③ 的 for
+   ↓
+④ pendingClose_ 空  →  ⑤ clear  →  下一轮 epoll_wait
+
+2. 路径 B｜数据到达 + 一次写完
+客户端发 "hello"
+   ↓
+epoll_wait → evs[0]={fd=5, EPOLLIN, ptr=&ch5}
+   ↓
+poller.poll → ch5->setRevents(EPOLLIN) → active_=[&ch5]
+   ↓
+runOnce ③ → ch5.handleEvent() → revents 含 EPOLLIN → readCallback_()
+   ↓
+main 的 on_read(raw)
+   ├─ n = c->in.readFd(5)
+   │     └─ Buffer::readFd：readv([可写区, 栈上 extrabuf 64KB])
+   │           → 内核把 "hello" 拷进 c->in  → writerIndex_ += 5
+   ├─ n == 5 > 0，继续
+   ├─ process_frames(c)                       ← 业务：切帧
+   │     while (in.readableBytes() >= 4)
+   │         len = ntohl(peek())               ← 只看不取
+   │         if (in.readableBytes() < 4 + len) break;   ← 半包，留着
+   │         in.retrieve(4)                    ← 吃掉头
+   │         body = in.peek()                  ← 直接指向 body
+   │         out.append(response)              ← 写答复
+   │         in.retrieve(len)
+   ├─ try_flush(c)
+   │     while (out.readableBytes() > 0)
+   │         n = write(5, out.peek(), out.readableBytes())
+   │         n > 0 → out.retrieve(n) → continue
+   │         循环到 out 空
+   │     if (ch.isWriting()) ch.disableWriting()   ← 没开过，跳过
+   └─ return
+   ↓
+runOnce ④ pendingClose_ 空 → ⑤ clear → 下一轮
+
+3. 路径 C｜写不干净（EAGAIN → 下一轮补写）
+try_flush：write 返回 -1，errno = EAGAIN
+   ├─ if (!ch.isWriting()) ch.enableWriting()
+   │     ├─ events_ |= EPOLLOUT   → 0x1 | 0x4 = 0x5
+   │     └─ Channel::update → loop.updateChannel → poller.update
+   │           └─ epoll_ctl(MOD, fd=5, {EPOLLIN|EPOLLOUT|ET})
+   └─ return（out 里还剩数据，无人看见，但注册表记住了）
+   ↓
+（下一轮）epoll_wait → evs[0]={fd=5, EPOLLOUT, ptr=&ch5}
+   ↓
+runOnce ③ → ch5.handleEvent() → revents 含 EPOLLOUT → writeCallback_()
+   ↓
+on_write → try_flush
+   ├─ write 成功 → out.retrieve(n) → 循环 → out 空
+   └─ if (ch.isWriting()) ch.disableWriting()
+         ├─ events_ &= ~EPOLLOUT → 0x1
+         └─ update → poller.update → epoll_ctl(MOD)
+
+4. 路径 D｜对端断开（FIN）→ 延迟关闭
+客户端 close()
+   ↓
+epoll_wait → evs[0]={fd=5, EPOLLIN, ptr=&ch5}     ← FIN 表现为「可读」
+   ↓
+runOnce ③ → ch5.handleEvent() → readCallback_() → on_read
+   ├─ n = c->in.readFd(5)  →  返回 0      ← FIN 的唯一可靠信号
+   ├─ if (n == 0) { loop.closeLater(5); return; }    ★ 只登记
+   │     └─ pendingClose_.push_back(5)               （对象还活着）
+   └─ return
+   ↓
+★ 返回 handleEvent → 返回 runOnce ③ 的 for
+   ↓
+runOnce ④ for (int fd : pendingClose_)
+   └─ closeHandler_(5)
+         └─ close_conn(5)                            ← main 的 lambda
+              ├─ conns.find(5)  → 找到
+              ├─ loop.removeChannel(&ch5)
+              │     └─ poller_.remove → epoll_ctl(DEL, fd=5)   ← 内核忘掉 &ch5
+              ├─ ::close(5)                                   ← 真关
+              └─ conns.erase(it)
+                    └─ unique_ptr<Conn> 析构
+                          ├─ Channel 析构（此时已不在 epoll 里）
+                          ├─ Buffer out 析构
+                          └─ Buffer in 析构
+   ↓
+runOnce ⑤ pendingClose_.clear()
+   ↓
+下一轮 epoll_wait…  ← 内核里已经没有 fd=5 了
+
+
+### 总览长图
+
+        ┌──────────── 业务层（main.cpp）────────────┐
+        │  create_and_listen   on_accept  on_read   │
+        │  process_frames      try_flush  close_conn│
+        └───────┬───────────────────────▲───────────┘
+                │ enableReading()        │ readCb_/writeCb_
+                │ closeLater()           │ errorCb_
+                │ removeChannel()        │
+        ┌───────▼───────────────────────┴───────────┐
+        │  Channel（每个 fd 一张档案卡）             │
+        │  fd_  events_(意向)  revents_(现实)  loop_ │
+        │  ┌─ update() → loop_->updateChannel()     │
+        │  └─ handleEvent() → 照 revents_ 调回调     │
+        └───────┬───────────────────────▲───────────┘
+                │ update / remove        │ handleEvent
+        ┌───────▼───────────────────────┴───────────┐
+        │  EventLoop（值班经理）                     │
+        │  runOnce: clear → poll → 分发 → 清场        │
+        │  active_   pendingClose_   closeHandler_   │
+        └───────┬───────────────────────▲───────────┘
+                │ update/remove/poll     │ Channel* 列表
+        ┌───────▼───────────────────────┴───────────┐
+        │  EpollPoller（门卫）                       │
+        │  epollfd_  update()  remove()  poll()      │
+        └───────┬───────────────────────▲───────────┘
+                │ epoll_ctl              │ epoll_wait
+        ┌───────▼───────────────────────┴───────────┐
+        │  Linux 内核（唯一真账本）                  │
+        └────────────────────────────────────────────┘

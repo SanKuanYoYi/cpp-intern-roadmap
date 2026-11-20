@@ -1,9 +1,12 @@
 #include "Buffer.h"
 #include "Channel.h"
+#include "EpollPoller.h"
+#include "EventLoop.h"
 
 #include "Buffer.cpp"
 #include "Channel.cpp"
-#include "EventLoop.h"
+#include "EpollPoller.cpp"
+#include "EventLoop.cpp"
 
 #include <arpa/inet.h> // inet_ntop
 #include <cerrno>
@@ -13,11 +16,9 @@
 #include <map>
 #include <memory>
 #include <netinet/in.h> // sockaddr_in
-#include <pthread.h>    // pthread
 #include <sys/epoll.h>  // epoll
 #include <sys/socket.h> // socket
 #include <sys/types.h>
-#include <sys/uio.h>
 #include <unistd.h> // read, write, close
 
 struct Conn {
@@ -27,13 +28,12 @@ struct Conn {
   Channel ch; // ← 内嵌 Channel
 };
 
-static const int kMaxEvents = 1024;
-
 static const size_t kMaxFrame = 10 * 1024 * 1024; // 10MB
 
 int main() {
   // 关键：listen_fd 必须非阻塞，否则下面的 accept 循环会卡死
-  int listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+  int listen_fd =
+      socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
   if (listen_fd < 0) {
     perror("socket");
     return -1;
@@ -66,16 +66,10 @@ int main() {
   std::function<void(int)> close_conn;
   std::function<bool(Conn *)> process_frames;
 
-  // 监听 Channel
-  Channel listenCh(&loop, listen_fd);
-  listenCh.setReadCallback(on_accept);
-  listenCh.enableReading();
+  //----------------------------------------------------------------------//
 
   // ---------- 关闭：只干真活，不做“该不该关”的判断 ----------
   close_conn = [&](int fd) {
-    // ⑥ close_conn 里（close_conn 开头）
-    fprintf(stderr, "[close] fd=%d\n", fd);
-
     auto it = conns.find(fd);
     if (it == conns.end()) // 已经关过了，幂等
       return;
@@ -94,6 +88,10 @@ int main() {
         c->out.retrieve(static_cast<size_t>(n));
         continue;
       }
+      if (n == 0) {
+        loop.closeLater(c->ch.fd());
+        return;
+      }
       if (n < 0 && errno == EINTR)
         continue;
       if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
@@ -101,7 +99,8 @@ int main() {
           c->ch.enableWriting();
         return;
       }
-      loop.closeLater(c->ch.fd()); // ← 改动 2
+      if (n < 0)
+        loop.closeLater(c->ch.fd());
       return;
     }
     if (c->ch.isWriting())
@@ -117,18 +116,28 @@ int main() {
                          SOCK_CLOEXEC | SOCK_NONBLOCK);
       // accept4 = accept + 顺手设置 fd(flags) 标志，少一次系统调用
       // 没有 accept4 的话，需要多调用 fcntl
-      if (conn < 0)
-        break; // 简化
+      if (conn < 0) {
+        if (errno == EINTR)
+          continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+          break;
+        return;
+      }
+
+      char ip[INET_ADDRSTRLEN];
+      inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
+      printf("Accepted connection from %s:%d\n", ip,
+             ntohs(client_addr.sin_port));
 
       auto c = std::make_unique<Conn>(&loop, conn);
-      Conn *raw = c.get(); // ← 拿裸指针
+      Conn *raw = c.get();        // ← 拿裸指针
+      conns[conn] = std::move(c); // ← unique_ptr 进 map，所有权转移
 
       raw->ch.setReadCallback([&, raw] { on_read(raw); });
       raw->ch.setWriteCallback([&, raw] { on_write(raw); });
       raw->ch.setCloseCallback([&, raw] { loop.closeLater(raw->ch.fd()); });
       raw->ch.setErrorCallback([&, raw] { loop.closeLater(raw->ch.fd()); });
       raw->ch.enableReading();
-      conns[conn] = std::move(c); // ← unique_ptr 进 map，所有权转移
     }
   };
 
@@ -194,4 +203,21 @@ int main() {
       // ⑤ while 回到顶部，继续看 in 里还有没有下一个完整帧
     }
   };
+
+  //----------------------------------------------------------------------//
+  // 监听 Channel
+  Channel listenCh(&loop, listen_fd);
+  listenCh.setReadCallback(on_accept);
+  listenCh.enableReading();
+
+  loop.loop();
 }
+
+
+/*
+python3 test_conn.py 1000
+
+ps -o nlwp,rss,cmd -C server
+# NLWP   RSS CMD
+# 1  6392 ./server
+*/
