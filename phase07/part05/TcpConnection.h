@@ -31,7 +31,9 @@ public:
   void setMessageCallback(MessageCallback cb) {
     messageCallback_ = std::move(cb);
   }
-  void setCloseCallback(CloseCallback cb) { closeCallback_ = std::move(cb); }
+  void setCloseCallback(CloseCallback cb) {
+    ConnCloseCallback_ = std::move(cb);
+  }
 
   void start();                       // 开始收数据
   void send(const std::string &data); // 发数据（内部处理写不完）
@@ -45,7 +47,7 @@ private:
   bool closed_ = false;
 
   MessageCallback messageCallback_;
-  CloseCallback closeCallback_;
+  CloseCallback ConnCloseCallback_;
 
   void handleRead();  // EPOLLIN  → 读 → 交给 messageCallback_
   void handleWrite(); // EPOLLOUT → 补写

@@ -32,6 +32,12 @@ void TcpConnection::tryFlush() {
       continue;
     }
 
+    if (n == 0) { // count>0 却写 0，防御
+      if (!channel_.isWriting())
+        channel_.enableWriting();
+      return;
+    }
+
     if (n < 0 && errno == EINTR)
       continue;
     ;
@@ -51,7 +57,8 @@ void TcpConnection::tryFlush() {
 
 void TcpConnection::handleRead() {
   while (true) {
-    ssize_t n = in_.readFd(channel_.fd(), 0);
+    int savedErrno = 0;
+    ssize_t n = in_.readFd(channel_.fd(), nullptr);
 
     if (n > 0) {
       if (messageCallback_)
@@ -66,9 +73,9 @@ void TcpConnection::handleRead() {
       return;
     } // FIN
 
-    if (n < 0 && errno == EINTR)
+    if (n < 0 && savedErrno == EINTR)
       continue;
-    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+    if (n < 0 && (savedErrno == EAGAIN || savedErrno == EWOULDBLOCK))
       break; // 读干净了
 
     handleClose();
@@ -87,8 +94,10 @@ void TcpConnection::handleClose() {
     return;              // ① 防重复：同一轮可能被调 2~3 次
   closed_ = true;        // ② 标记：从此刻起 send() 无效
   channel_.disableAll(); // ③ 退订：让 epoll 立刻忘掉我（可选但推荐）
-  if (closeCallback_)
-    closeCallback_(this); // ④ 只通知，不自杀
+  if (ConnCloseCallback_)
+    ConnCloseCallback_(this); // ④ 只通知，不自杀
 }
 
 void TcpConnection::handleError() { forceClose(); }
+
+void TcpConnection::forceClose() { handleClose(); }

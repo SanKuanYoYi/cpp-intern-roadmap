@@ -45,7 +45,7 @@ ssize_t Buffer::readFd(int fd, int *saveErrno) {
 
   const ssize_t n = readv(fd, vec, iovcnt);
 
-  if (n < 0) {
+  if (n < 0 && saveErrno) {
     *saveErrno = errno; // 错误，交给调用方判断 EAGAIN/EINTR
   } else if (static_cast<size_t>(n) <= writable) {
     writeIndex_ += n; // 全读进 vec[0]，直接推进游标
