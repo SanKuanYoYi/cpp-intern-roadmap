@@ -18,6 +18,7 @@ public:
   EventLoop(const EventLoop &) = delete;
   EventLoop &operator=(const EventLoop &) = delete;
 
+  // 延迟处理
   void queueInLoop(Functor fn) { pendingFunctors_.push_back(std::move(fn)); }
 
   void runOnce(); // 跑一轮：poll → 分发 → 处理延迟关闭

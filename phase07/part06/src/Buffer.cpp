@@ -5,8 +5,8 @@
 
 // public:
 Buffer::Buffer(size_t initialSize)
-    : buf_(kCheapPrepend + initialSize), readIndex_(kCheapPrepend),
-      writeIndex_(kCheapPrepend) {}
+    : buf_(kCheapPrepend + initialSize), writeIndex_(kCheapPrepend),
+      readIndex_(kCheapPrepend) {}
 
 size_t Buffer::readableBytes() const { return writeIndex_ - readIndex_; }
 
@@ -45,16 +45,18 @@ ssize_t Buffer::readFd(int fd, int *saveErrno) {
 
   const ssize_t n = readv(fd, vec, iovcnt);
 
-  if (n < 0 && saveErrno) {
-    *saveErrno = errno; // 错误，交给调用方判断 EAGAIN/EINTR
+  if (n < 0) {
+    if (saveErrno) {
+      *saveErrno = errno; // 错误，交给调用方判断 EAGAIN/EINTR
+    }
   } else if (static_cast<size_t>(n) <= writable) {
-    writeIndex_ += n; // 全读进 vec[0]，直接推进游标
+    writeIndex_ += static_cast<size_t>(n); // 全读进 vec[0]，直接推进游标
   } else {
     // n > writable：vec[0] 被填满，多出来的在 extrabuf
     writeIndex_ = buf_.size(); // 先"假装"写满
     append(extraBuf,
-           static_cast<size_t>(
-               n - writable)); // 再 append 剩余（内部会 ensure/resize）
+           static_cast<size_t>(n) -
+               writable); // 再 append 剩余（内部会 ensure/resize）
   }
   return n;
 }

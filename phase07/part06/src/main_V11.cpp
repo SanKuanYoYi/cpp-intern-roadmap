@@ -54,5 +54,5 @@ python3 test_conn.py 1000
 
 ps -o nlwp,rss,cmd -C server
 # NLWP   RSS CMD
-# 1  18116 ./server
+# 1  17544 ./server
 */

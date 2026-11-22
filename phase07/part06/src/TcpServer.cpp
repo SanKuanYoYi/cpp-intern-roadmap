@@ -73,7 +73,7 @@ void TcpServer::handleAccept() {
     // ① 挂上"收到数据怎么办"（模板从 TcpServer 拷一份）
     raw->setMessageCallback(messageCallback_);
     // ② 挂上"连接关闭了怎么办"（登记删除）
-    raw->setCloseCallback([this](TcpConnection *c) { removeConnection(c); });
+    raw->setConnCloseCallback([this](TcpConnection *c) { removeConnection(c); });
     // ③ 通知业务："新连接来了"（可选）
     if (connectionCallback_)
       connectionCallback_(raw);

@@ -140,7 +140,7 @@ listenFd_ 是裸 int，没有 RAII 包装。默认析构函数不会关它。
 好处：将来 T11 的签名改成 void(TcpConnection*, Buffer*)，TcpServer 一行都不用改
 
 ### ConnectionCallback 签名是 void(TcpConnection*)
-跟 TcpConnection::CloseCallback 完全一样。但语义不同：
+跟 TcpConnection::ConnCloseCallback 完全一样。但语义不同：
 回调	谁填	谁调	含义
 MessageCallback	main	TcpConnection::handleRead（间接）	“有数据了”
 ConnectionCallback	main	TcpServer::handleAccept	“新连接来了”
@@ -171,7 +171,7 @@ handleAccept()	main 的 on_accept	accept4 循环 → 建 conn → 挂回调 → 
 removeConnection(TcpConnection*)	main 的 setCloseHandler lambda	只登记，不销毁：loop_->queueInLoop([this, fd]{ conns_.erase(fd); })
 
 为什么 removeConnection 参数是 TcpConnection* 而不是 int fd？
-因为它的调用者是 TcpConnection::closeCallback_，而那个回调的签名是 void(TcpConnection*)
+因为它的调用者是 TcpConnection::ConnCloseCallback_，而那个回调的签名是 void(TcpConnection*)
 
 ### ~TcpServer 要关 listenFd_
 listenFd_ 是裸 int，没有 RAII 封装。默认析构函数不会自动 close 它。
@@ -187,8 +187,21 @@ void TcpConnection::handleClose() {
     if (closed_) return;
     closed_ = true;
     channel_.disableAll();        // 停掉所有事件
-    if (closeCallback_) closeCallback_(this);   // 通知 TcpServer 登记删除
+    if (ConnCloseCallback_) ConnCloseCallback_(this);   // 通知 TcpServer 登记删除
 }
+
+### messageCallback_
+main 里的 process_frames（函数本体，代码段的固定地址）
+        │  setMessageCallback(process_frames)   装
+        ▼
+TcpServer::messageCallback_        ← 盒子 ①（装着函数指针副本）
+        │  handleAccept 里每个新连接都 setMessageCallback(messageCallback_)  复印
+        ▼
+TcpConnection::messageCallback_    ← 盒子 ②③④…（每个连接各一份，内容相同）
+        │  handleRead 里 messageCallback_(this, in_)
+        ▼
+    真正执行 process_frames
+
 
 
 # 用 disableAll() 而不是 removeChannel() 的三个好处
@@ -199,3 +212,126 @@ void TcpConnection::handleClose() {
 不需要 friend	channel_ 是私有的。如果要在 TcpServer 里 
                 loop.removeChannel(&conn->channel_)，就得加 friend 或者暴露 channel() getter——都是封装上的裂缝
 顺序天然正确	disableAll()（fd 还活着，DEL 成功）→ ::close(fd)。先摘 epoll 再关 fd，正是那条铁律
+
+**************************************************************************
+复习
+**************************************************************************
+
+# 整条任务链路
+T1  裸 socket
+T2  一连接一线程
+T3  epoll 单线程
+T4  全非阻塞 + 写缓冲
+T5  切 ET
+T6  抽象 Buffer
+T7  长度前缀协议
+T8  封装 EpollPoller
+T9  封装 Channel + 回调分发
+T10 封装 EventLoop —— 循环离开 main
+T11 封装 TcpConnection —— 连接自己管自己
+T12 封装 TcpServer —— main 只剩 8 行
+
+
+# 最终的层次：
+        main                  ← 只有业务：process_frames + 8 行
+          │
+      TcpServer               ← 框架：socket / accept / 连接表
+          │
+     TcpConnection            ← 一条连接：读、写、关
+          │
+        Channel               ← 一个 fd 的监督档案
+        │       │
+EventLoop   EpollPoller       ← 节奏 + 眼睛
+        │
+     Buffer                   ← 字节容器
+        │
+      Linux 内核
+
+
+# 纯垂直纵深的线性时间轴
+###  第一阶段：服务器启动与监听
+[ main_V11.cpp ]
+  └─> 创建 TcpServer 对象，调用 TcpServer::start()
+        │
+        └─> [ TcpServer 类 ] 内部执行：socket() → bind() → listen()
+              │
+              └─> [ TcpServer 类 ] 创建监听 Channel，绑定回调为 TcpServer::handleAccept
+                    │
+                    └─> [ TcpServer 类 ] 调用 EventLoop::updateChannel()
+                          │
+                          └─> [ EpollPoller 类 ] 注册 listenfd 的读事件到 epoll
+
+### 第二阶段：新连接建立
+[ EventLoop 类 ] 调用 EpollPoller::poll() (底层即 epoll_wait) 阻塞等待...
+  │
+  └─> [ EpollPoller 类 ] 监听到新连接，epoll_wait 返回
+        │
+        └─> [ EventLoop 类 ] 遍历活跃 Channel，调用 Channel::handleEvent()
+              │
+              └─> [ Channel 类 ] 触发读回调（由 TcpServer 注册）
+                    │
+                    └─> [ TcpServer 类 ] 执行 TcpServer::handleAccept()，拿到 connfd
+                          │
+                          └─> [ TcpServer 类 ] new TcpConnection 对象，并调用 start()
+                                │
+                                └─> [ TcpConnection 类 ] 调用 Channel::enableReading()
+                                      │
+                                      └─> [ EpollPoller 类 ] 将新连接的 connfd 注册进 epoll
+
+### 第三阶段：数据到达与读取
+[ EventLoop 类 ] 调用 EpollPoller::poll() (底层即 epoll_wait) 阻塞等待...
+  │
+  └─> [ EpollPoller 类 ] 监听到可读事件，epoll_wait 返回
+        │
+        └─> [ EventLoop 类 ] 遍历活跃 Channel，调用 Channel::handleEvent()
+              │
+              └─> [ Channel 类 ] 触发读回调（由 TcpConnection 注册）
+                    │
+                    └─> [ TcpConnection 类 ] 执行 handleRead()
+                          │
+                          └─> [ TcpConnection 类 ] 调用 Buffer::in_.readFd()
+                                (将内核数据读到用户态输入缓冲区)
+
+### 第四阶段：业务处理与发送
+[ TcpConnection 类 ] 数据读完，触发业务回调（由 main_V11.cpp 注册）
+  │
+  └─> [ main_V11.cpp ] 执行 process_frames（切包/解包逻辑）
+        │
+        └─> [ main_V11.cpp ] 业务处理完，调用 TcpConnection::send() 回传数据
+              │
+              └─> [ TcpConnection 类 ] 调用 Buffer::out_.append()，将数据放入输出缓冲
+                    │
+                    └─> [ TcpConnection 类 ] 调用 tryFlush() 尝试直接写 socket
+                          │
+                          └─> (若内核缓冲满未写完) [ TcpConnection 类 ] 调用 Channel::enableWriting()
+                                │
+                                └─> [ EpollPoller 类 ] 修改 epoll 监听事件，增加 EPOLLOUT
+
+### 第五阶段：断开连接（对端主动关闭）
+[ EventLoop 类 ] 调用 EpollPoller::poll() (底层即 epoll_wait) 阻塞等待...
+  │
+  └─> [ EpollPoller 类 ] 监听到对端 FIN，epoll_wait 返回
+        │
+        └─> [ EventLoop 类 ] 遍历活跃 Channel，调用 Channel::handleEvent()
+              │
+              └─> [ Channel 类 ] 触发读回调
+                    │
+                    └─> [ TcpConnection 类 ] 执行 handleRead()，此时 readFd() 返回 0
+                          │
+                          └─> [ TcpConnection 类 ] 得知关闭，执行 handleClose()
+                                │
+                                └─> [ TcpConnection 类 ] 调用 Channel::disableAll() 注销所有事件
+                                      │
+                                      └─> [ TcpConnection 类 ] 触发 closeCallback（由 TcpServer 注册）
+
+### 第六阶段：资源销毁
+[ TcpServer 类 ] 在 closeCallback 中，调用 EventLoop::queueInLoop() 将销毁任务抛给 IO 线程
+  │
+  └─> [ EventLoop 类 ] 在下一轮 loop 循环中，执行 doPendingFunctors()
+        │
+        └─> [ TcpServer 类 ] 执行排队的回调：从内部 map 中 erase 该连接
+              │
+              └─> [ 系统(C++) ] TcpConnection 的 shared_ptr 引用计数归零
+                    │
+                    └─> [ TcpConnection 类 ] 自动执行析构函数 ~TcpConnection()
+                          (彻底死亡，释放内存) 

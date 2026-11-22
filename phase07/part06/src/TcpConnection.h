@@ -15,7 +15,7 @@ public:
   // 业务回调：拿到连接和它的读缓冲区，自己去切包
   using MessageCallback = std::function<void(TcpConnection *, Buffer &)>;
   // 关闭通知：上层据此把对象从 map 里删掉
-  using CloseCallback = std::function<void(TcpConnection *)>;
+  using ConnCloseCallback = std::function<void(TcpConnection *)>;
 
   TcpConnection(EventLoop *loop, int fd);
   ~TcpConnection();
@@ -31,7 +31,7 @@ public:
   void setMessageCallback(MessageCallback cb) {
     messageCallback_ = std::move(cb);
   }
-  void setCloseCallback(CloseCallback cb) {
+  void setConnCloseCallback(ConnCloseCallback cb) {
     ConnCloseCallback_ = std::move(cb);
   }
 
@@ -47,7 +47,7 @@ private:
   bool closed_ = false;
 
   MessageCallback messageCallback_;
-  CloseCallback ConnCloseCallback_;
+  ConnCloseCallback ConnCloseCallback_;
 
   void handleRead();  // EPOLLIN  → 读 → 交给 messageCallback_
   void handleWrite(); // EPOLLOUT → 补写
