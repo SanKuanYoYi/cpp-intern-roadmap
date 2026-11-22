@@ -79,7 +79,7 @@ void TcpServer::handleAccept() {
       connectionCallback_(raw);
     // ④ 先入表，再开闸
     conns_[fd] = std::move(conn);
-    conn->start();
+    raw->start(); // 用指针
     // TcpConnection::start() 要判 closed_
   }
 }

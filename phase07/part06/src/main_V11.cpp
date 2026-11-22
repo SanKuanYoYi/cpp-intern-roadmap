@@ -26,7 +26,12 @@ static void process_frames(TcpConnection *c, Buffer &in) {
     std::string body(in.peek(), len);
     in.retrieve(len); // 吃掉 body
 
-    c->send(body); // echo
+    // ★ 重新打包成 [4 字节网络序长度][body],跟协议约定一致
+    uint32_t net_len = htonl(len);
+    std::string out(sizeof(net_len), '\0');
+    std::memcpy(out.data(), &net_len, sizeof(net_len));
+    out.append(body);
+    c->send(out);
   }
 }
 
@@ -44,3 +49,10 @@ int main() {
 
 // cmake --build build -j
 
+/*
+python3 test_conn.py 1000
+
+ps -o nlwp,rss,cmd -C server
+# NLWP   RSS CMD
+# 1  18116 ./server
+*/
