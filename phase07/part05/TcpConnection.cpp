@@ -58,7 +58,7 @@ void TcpConnection::tryFlush() {
 void TcpConnection::handleRead() {
   while (true) {
     int savedErrno = 0;
-    ssize_t n = in_.readFd(channel_.fd(), nullptr);
+    ssize_t n = in_.readFd(channel_.fd(), &savedErrno);
 
     if (n > 0) {
       if (messageCallback_)

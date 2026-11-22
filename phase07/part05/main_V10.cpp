@@ -111,7 +111,10 @@ int main() {
       auto conn = std::make_unique<TcpConnection>(&loop, fd);
       TcpConnection *raw = conn.get();
 
-      raw->setMessageCallback(process_frames);
+      raw->setMessageCallback([&](TcpConnection *c, Buffer &in) {
+        // 切包 + 回写，业务只在这里
+        process_frames(c, in);
+      });
       raw->setCloseCallback(
           [&](TcpConnection *c) { loop.closeLater(c->fd()); });
 
