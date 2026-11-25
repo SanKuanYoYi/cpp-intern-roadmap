@@ -2,7 +2,10 @@
 #include "EventLoop.h"
 
 Channel::Channel(EventLoop *loop, int fd) : loop(loop), fd_(fd) {};
-Channel::~Channel() = default;
+Channel::~Channel() {
+  if (events_ != 0)
+    disableAll();
+}
 
 void Channel::handleEvent() {
   // 顺序有讲究：错误 → 挂断 → 可读 → 可写

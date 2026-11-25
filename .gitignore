@@ -16,6 +16,7 @@ x86/
 
 index
 app
+.cache
 
 phase03/downloader/out.bin
 phase03/downloader/test.bin
