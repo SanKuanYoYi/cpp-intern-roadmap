@@ -45,7 +45,7 @@ target_include_directories(netlib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(netlib PUBLIC Threads::Threads)
 
 # ────────────────────────── 服务端 ──────────────────────────
-add_executable(server src/main_V11.cpp)
+add_executable(server src/main_V12.cpp)
 target_link_libraries(server PRIVATE netlib)
 
 # ────────────────────────── 测试程序 ──────────────────────────
