@@ -135,8 +135,8 @@ n 被赋值但从没被读过 → GCC 的 -Wall 会报 -Wunused-but-set-variable
 
 ### queueInLoop() —— 塞纸条 + 按铃
 条件	场景	不按铃的后果
-!isInLoopThread()	别的线程投的，值班员正在 epoll_wait 打盹	任务永远不执行（除非碰巧有 IO）
-callingPendingFunctors_	本线程正在执行上一批任务时又投了一个	这批执行完直接回去 epoll_wait(-1)，新任务要等下个 IO 事件，可能是几小时后
+1. !isInLoopThread()	别的线程投的，值班员正在 epoll_wait 打盹	任务永远不执行（除非碰巧有 IO）
+2. callingPendingFunctors_	本线程正在执行上一批任务时又投了一个	这批执行完直接回去 epoll_wait(-1)，新任务要等下个 IO 事件，可能是几小时后
 
 锁只包住 push_back，不包 wakeup()。原因是 wakeup() 是 syscall，占锁时间没必要长
 

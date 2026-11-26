@@ -34,9 +34,12 @@ int main() {
                 .count();
   printf("wakeup latency = %lld ms\n", (long long)ms);
 
-  // 实验 3：本线程 runInLoop 应当同步执行
+  // 实验 3：从主线程调 runInLoop → 异步（不阻塞）
   printf("before sync\n");
-  sub->runInLoop([] { printf("should NOT print from main thread\n"); });
+  sub->runInLoop([] { printf("runInLoop task ran in sub-thread (async)\n"); });
   printf("after sync\n");
+  // 预期顺序：before sync → after sync → runInLoop task ran ...
+  // 且任务打印的 thread id 是子线程，不是主线程
+
   return 0;
 }

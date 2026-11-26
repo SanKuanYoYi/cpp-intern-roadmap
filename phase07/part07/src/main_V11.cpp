@@ -52,12 +52,13 @@ int main() {
   return 0; // 永远走不到
 }
 
-// cmake --build build -j
+// cmake -S . -B build
+// cmake --build build -j   ==   (build/)make
 
 /*
 python3 test_conn.py 1000
 
 ps -o nlwp,rss,cmd -C server
 # NLWP   RSS CMD
-# 1  17544 ./server
+# 1  6120 ./server
 */

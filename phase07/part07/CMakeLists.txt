@@ -37,23 +37,22 @@ add_library(netlib STATIC
     src/Channel.cpp
     src/EpollPoller.cpp
     src/EventLoop.cpp
+    src/EventLoopThread.cpp      
     src/TcpConnection.cpp
     src/TcpServer.cpp
 )
-
-# PUBLIC：链接 netlib 的目标自动获得 src/ 这个 include 路径
 target_include_directories(netlib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
-# T13 之前 Threads 其实用不上，先留着不影响
 target_link_libraries(netlib PUBLIC Threads::Threads)
 
 # ────────────────────────── 服务端 ──────────────────────────
 add_executable(server src/main_V11.cpp)
 target_link_libraries(server PRIVATE netlib)
 
-# ────────────────────────── 单元测试 ──────────────────────────
-add_executable(buffer_test test/buffer_test.cpp)
-target_link_libraries(buffer_test PRIVATE netlib)
+# ────────────────────────── 测试程序 ──────────────────────────
+# T13 的 eventloop_thread 测试
+add_executable(eventloop_thread_test test/eventloop_thread_test.cpp)
+target_link_libraries(eventloop_thread_test PRIVATE netlib)
+add_test(NAME eventloop_thread_test COMMAND eventloop_thread_test)
 
 enable_testing()
 add_test(NAME buffer_test COMMAND buffer_test)

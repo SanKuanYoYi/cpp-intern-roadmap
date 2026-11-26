@@ -32,7 +32,7 @@ void EventLoopThread::threadFunc() {
 }
 
 EventLoop *EventLoopThread::startLoop() {
-  thread_ = std::thread([this] { startLoop(); });
+  thread_ = std::thread([this] { threadFunc(); });
 
   EventLoop *loop = nullptr;
   {
