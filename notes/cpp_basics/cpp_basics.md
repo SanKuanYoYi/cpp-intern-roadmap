@@ -490,3 +490,16 @@ result（目标起始迭代器）：你要把数据复制到哪里的起点。
 
 返回值
 返回目标容器中最后一个被复制元素的下一个位置的迭代器。
+
+
+34. std::atomic 的完整 API
+std::atomic<long> x{0};
+
+x.load();              // 原子读
+x.store(5);            // 原子写
+x.fetch_add(1);        // 原子加，返回【旧值】
+x.fetch_sub(1);        // 原子减
+x.exchange(10);        // 换成 10，返回旧值
+x.compare_exchange_weak(expected, desired);   // CAS（无锁编程核心）
+
+
